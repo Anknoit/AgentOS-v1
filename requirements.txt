@@ -8,7 +8,7 @@ pydantic-settings==2.3.0
 
 # Database (future-ready, not forced yet)
 sqlalchemy==2.0.30
-psycopg2-binary==2.9.9
+# psycopg2-binary==2.9.9
 psycopg[binary]
 
 
