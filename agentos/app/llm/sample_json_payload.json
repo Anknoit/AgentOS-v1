@@ -1,0 +1,26 @@
+{
+  "entity_id": "deal-123",
+  "entity_type": "Deal",
+  "owner": "ankit",
+  "priority": 1,
+  "lifecycle_stage": "Proposal",
+  "state": {
+    "status": "stalled",
+    "health_score": 0.4,
+    "last_updated": "2025-01-01T10:00:00Z",
+    "time_in_state_hours": 96
+  },
+  "signals": [
+    {
+      "signal_type": "Behavioral",
+      "name": "No client response",
+      "value": "7 days",
+      "direction": "down",
+      "confidence": 0.9,
+      "timestamp": "2025-01-01T09:00:00Z"
+    }
+  ],
+  "constraints": [
+    "cannot auto execute"
+  ]
+}
