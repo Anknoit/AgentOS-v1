@@ -4,7 +4,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.config.settings import settings
 
-
+# For integrtating real LLM - Ollama or gpt
 # class LLMClient:
 #     def __init__(self):
 #         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
