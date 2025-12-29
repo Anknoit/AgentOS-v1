@@ -1,3 +1,6 @@
+<img src = "agentOs.png">
+<br>
+
 # 🚀 AgentOS — A Safe, Ontology-Driven Agentic Decision Platform
 
 > **AgentOS is not a chatbot.  
