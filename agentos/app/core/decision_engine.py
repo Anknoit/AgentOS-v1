@@ -12,6 +12,11 @@ from app.llm.client import LLMClient
 from app.llm.prompts import nba_prompt
 from app.llm.parser import parse_llm_response
 
+# TELECOM
+from app.industries.telecom.decision_override import telecom_override
+from app.industries.telecom.mapper import extract_telecom_context
+
+
 
 class DecisionEngine:
     """
@@ -83,6 +88,25 @@ class DecisionEngine:
             review_required=risk_level != RiskLevel.LOW,
             created_at=datetime.utcnow()
         )
+
+
+        # 7. TELECOM-specific execution override (SAFE, deterministic)
+        if hasattr(entity, "metadata") and entity.metadata.get("industry") == "telecom":
+            telecom_context = extract_telecom_context(entity.metadata)
+
+            final_action_type, override_reason = telecom_override(
+                base_action=decision.recommended_action.action_type,
+                confidence=decision.confidence,
+                telecom_context=telecom_context,
+                sop_key=entity.metadata.get("sop_key"),
+            )
+
+            # If telecom policy downgraded EXECUTE → RECOMMEND
+            if final_action_type != decision.recommended_action.action_type:
+                decision.recommended_action.action_type = final_action_type
+                decision.reasoning.append(
+                    f"Telecom policy override: {override_reason}"
+                )
 
         return decision
 
