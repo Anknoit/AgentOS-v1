@@ -246,16 +246,6 @@ MIT (for now)
 
 ---
 
-## 👤 Author
-
-Built by an engineer with deep experience in:
-- Telecom (AAA, DIAMETER)
-- Agentic systems
-- Distributed decision engines
-- Production-grade AI design
-
----
-
 > **If you can explain why your AI made a decision,  
 control when it acts,  
 and prove what happened —  
