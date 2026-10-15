@@ -1,12 +1,14 @@
 /**
- * Headless Phase 0 verification of the sidecar lifecycle — no Electron, no display.
+ * Headless verification of the sidecar lifecycle — no Electron, no display.
  *
  * Proves the hard unknown end to end:
  *   1. spawn the FastAPI sidecar (via uv in the backend dir),
  *   2. wait for /health,
- *   3. authenticate as the dev tenant and trigger the trivial agent loop,
- *   4. confirm it streamed output + captured a usage_event,
- *   5. tear the sidecar down cleanly.
+ *   3. authenticate as the dev tenant,
+ *   4. Phase 0 — trigger the trivial agent loop and confirm streamed output + a usage_event,
+ *   5. Phase 1 — create a Support Desk agent, run it, and confirm a complete action log plus
+ *      one model_call and one tool_call usage event, all carrying the client trace id,
+ *   6. tear the sidecar down cleanly.
  *
  * Run: `npm run smoke:sidecar` (from desktop/).
  */
@@ -47,35 +49,80 @@ async function main(): Promise<void> {
       "Content-Type": "application/json",
       "X-Trace-Id": traceId,
     };
+    const getJson = async (path: string) =>
+      (await fetch(`${cfg.baseUrl}${path}`, { headers })).json();
+    const postJson = async (path: string, body: unknown) =>
+      (
+        await fetch(`${cfg.baseUrl}${path}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        })
+      ).json();
 
-    const who = await (await fetch(`${cfg.baseUrl}/v1/whoami`, { headers })).json();
+    const who = await getJson("/v1/whoami");
     console.log(`[smoke] authenticated tenant=${who.tenant_id}`);
 
-    const run = await (
-      await fetch(`${cfg.baseUrl}/v1/runs/sync`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ task: "hello from the desktop smoke test" }),
-      })
-    ).json();
-    console.log(`[smoke] run ${run.run_id} status=${run.status} tokens=${run.total_tokens}`);
+    // --- Phase 0: the anonymous agent-loop spike ---
+    const spike = await postJson("/v1/runs/sync", {
+      task: "hello from the desktop smoke test",
+    });
+    console.log(`[smoke] spike run ${spike.run_id} status=${spike.status} tokens=${spike.total_tokens}`);
+    const spikeUsage = await getJson(`/v1/usage?run_id=${spike.run_id}`);
+    const spikeOk =
+      spike.status === "completed" &&
+      spike.usage_event_id &&
+      spike.total_tokens > 0 &&
+      spikeUsage.length === 1 &&
+      spikeUsage[0].trace_id === traceId;
+
+    // --- Phase 1: a real Support Desk agent, run as a managed job ---
+    const agent = await postJson("/v1/agents", {
+      name: "Smoke Desk",
+      template: "support_desk",
+    });
+    console.log(`[smoke] created agent ${agent.id} version=${agent.current_version_id}`);
+
+    const run = await postJson(`/v1/agents/${agent.id}/runs`, {
+      task: "I need a refund on my order",
+    });
+    console.log(
+      `[smoke] agent run ${run.id} status=${run.status} tokens=${run.total_tokens} tools=${run.tool_calls}`,
+    );
     console.log(`[smoke] output: ${run.output}`);
 
-    const usage = await (
-      await fetch(`${cfg.baseUrl}/v1/usage?run_id=${run.run_id}`, { headers })
-    ).json();
+    const actions = await getJson(`/v1/runs/${run.id}/actions`);
+    const actionTypes = actions.map((a: { type: string }) => a.type);
+    const usage = await getJson(`/v1/usage?run_id=${run.id}`);
+    const usageKinds = usage.map((u: { event_type: string }) => u.event_type).sort();
 
-    const ok =
+    const agentOk =
       run.status === "completed" &&
-      run.usage_event_id &&
+      run.tool_calls === 1 &&
       run.total_tokens > 0 &&
-      usage.length === 1 &&
-      usage[0].trace_id === traceId;
+      String(run.output).toLowerCase().includes("refund") &&
+      actionTypes[0] === "run_started" &&
+      actionTypes[actionTypes.length - 1] === "run_completed" &&
+      actionTypes.includes("tool_call") &&
+      actionTypes.includes("model_call") &&
+      usageKinds.length === 2 &&
+      usageKinds[0] === "model_call" &&
+      usageKinds[1] === "tool_call" &&
+      usage.every((u: { trace_id: string }) => u.trace_id === traceId);
 
-    if (ok) {
-      console.log(`[smoke] PASS — usage_event ${usage[0].id} carries trace_id ${traceId}`);
+    if (spikeOk && agentOk) {
+      console.log(
+        `[smoke] PASS — Support Desk run ${run.id}: ${actions.length}-step audit log, ` +
+          `usage [${usageKinds.join(", ")}] all tagged trace_id ${traceId}`,
+      );
     } else {
-      console.error("[smoke] FAIL — unexpected run/usage result", { run, usage });
+      console.error("[smoke] FAIL — unexpected result", {
+        spikeOk,
+        agentOk,
+        run,
+        actionTypes,
+        usageKinds,
+      });
       exitCode = 1;
     }
   } catch (err) {

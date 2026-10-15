@@ -11,18 +11,30 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, Query, WebSocket
+from sqlalchemy import select
 from starlette.websockets import WebSocketDisconnect
 
 from app.config.settings import get_settings
 from app.core.auth import CurrentTenant, resolve_api_key
 from app.core.context import set_tenant, set_trace_id
-from app.core.errors import AuthError
+from app.core.errors import AuthError, NotFoundError
 from app.core.logging import get_logger
 from app.core.metrics import RUNS_STARTED
+from app.db.session import tenant_session
+from app.models.run import Run
+from app.runtime import store
 from app.runtime.agent import run_agent_loop
+from app.runtime.manager import get_run_manager
 from app.runtime.queue import enqueue_run
-from app.schemas.run import RunResultResponse, TriggerRunRequest, TriggerRunResponse
+from app.schemas.run import (
+    ActionLogOut,
+    RunOut,
+    RunResultResponse,
+    TriggerRunRequest,
+    TriggerRunResponse,
+)
+from app.services import runs as runs_service
 
 log = get_logger(__name__)
 router = APIRouter()
@@ -117,3 +129,63 @@ async def stream_run(ws: WebSocket) -> None:
         await ws.close()
     except WebSocketDisconnect:
         log.info("ws.disconnect")
+
+
+# ---- Phase 1: inspect and control agent runs ----
+@router.get("", response_model=list[RunOut])
+async def list_runs(
+    tenant: CurrentTenant,
+    agent_id: str | None = Query(default=None),
+    limit: int = Query(default=100, le=1000),
+) -> list[RunOut]:
+    async with tenant_session(tenant.tenant_id) as session:
+        stmt = (
+            select(Run)
+            .where(Run.tenant_id == tenant.tenant_id)
+            .order_by(Run.created_at.desc())
+            .limit(limit)
+        )
+        if agent_id:
+            stmt = stmt.where(Run.agent_id == agent_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        return [RunOut.model_validate(r) for r in rows]
+
+
+@router.get("/{run_id}", response_model=RunOut)
+async def get_run(run_id: str, tenant: CurrentTenant) -> RunOut:
+    run = await store.get_run(tenant.tenant_id, run_id)
+    if run is None:
+        raise NotFoundError(f"run '{run_id}' not found")
+    return RunOut.model_validate(run)
+
+
+@router.get("/{run_id}/actions", response_model=list[ActionLogOut])
+async def get_run_actions(run_id: str, tenant: CurrentTenant) -> list[ActionLogOut]:
+    """The complete, append-only audit trail for a run (ordered by step)."""
+    rows = await store.list_actions(tenant.tenant_id, run_id)
+    return [ActionLogOut.model_validate(r) for r in rows]
+
+
+@router.post("/{run_id}/resume", response_model=RunOut, status_code=202)
+async def resume_run(run_id: str, tenant: CurrentTenant) -> RunOut:
+    """Resume a paused run from its checkpoint; waits for completion in-process."""
+    await runs_service.resume_run(tenant_id=tenant.tenant_id, run_id=run_id)
+    if get_settings().use_inprocess_runtime:
+        await get_run_manager().wait(run_id)
+    run = await store.get_run(tenant.tenant_id, run_id)
+    if run is None:
+        raise NotFoundError(f"run '{run_id}' not found")
+    return RunOut.model_validate(run)
+
+
+@router.post("/{run_id}/cancel", response_model=RunOut)
+async def cancel_run(run_id: str, tenant: CurrentTenant) -> RunOut:
+    """Stop/kill a run. Marks it killed; any in-flight task is cancelled."""
+    run = await store.get_run(tenant.tenant_id, run_id)
+    if run is None:
+        raise NotFoundError(f"run '{run_id}' not found")
+    get_run_manager().cancel(run_id)
+    if run.status not in ("completed", "failed"):
+        await store.set_run_status(tenant.tenant_id, run_id, "killed")
+    run = await store.get_run(tenant.tenant_id, run_id)
+    return RunOut.model_validate(run)

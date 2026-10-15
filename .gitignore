@@ -213,6 +213,10 @@ node_modules/
 # Backend SQLite dev-fallback DBs
 *.db
 backend/agentos.db
+# LangGraph checkpoint stores (sibling files to the SQLite dev DB — ADR-0007)
+*.ckpt
+*.db-shm
+*.db-wal
 # Desktop build + packaging output
 desktop/dist/
 desktop/release/

@@ -18,10 +18,11 @@ AGENTOS_OTEL_EXPORTER=none uv run python -c \
 
 (The backend also serves it live at `GET /v1/openapi.json`, with Swagger UI at `/v1/docs`.)
 
-## Typed client SDK (fills in after Phase 1)
+## Typed client SDK (generate now — the Phase 1 surface is real)
 
-Per the build plan, once the Phase 1 API surface is real we generate a typed TS client here and
-begin replacing `AgentOS_ui/src/lib/agentos/mockData.ts` + `store.tsx` with real calls. Planned:
+The Phase 1 API surface (agents CRUD, runs, action log, usage) is stable, so the UI can start
+generating a typed client here and replacing `AgentOS_ui/src/lib/agentos/mockData.ts` +
+`store.tsx` with real calls:
 
 ```bash
 npx openapi-typescript shared/openapi.json -o shared/src/api-types.ts
@@ -32,23 +33,34 @@ plus a thin fetch/WebSocket wrapper that injects `Authorization` and the `X-Trac
 
 ## WebSocket contract (not in OpenAPI)
 
-`WS /v1/runs/stream` — connect with `?token=<api-key>` (or an `Authorization: Bearer` header),
-send `{"task": "..."}`, and receive a stream of run-event frames:
+**Agent runs** — `WS /v1/agents/{agent_id}/runs/stream`: connect with `?token=<api-key>` (or an
+`Authorization: Bearer` header), send `{"task": "..."}`, and receive run-event frames as the run
+executes. The run is a managed job — disconnecting does not stop it.
 
 | `type`        | fields |
 |---------------|--------|
-| `run_started` | `run_id`, `provider` |
+| `run_started` | `run_id` |
+| `node`        | `run_id`, `name`, `seq` |
+| `tool_call`   | `run_id`, `name`, `seq`, `results`, `usage_event_id` |
 | `token`       | `run_id`, `text` |
 | `usage`       | `run_id`, `usage_event_id`, `input_tokens`, `output_tokens`, `total_tokens` |
-| `done`        | `run_id`, `usage_event_id` |
+| `done`        | `run_id`, `output`, `input_tokens`, `output_tokens`, `total_tokens`, `tool_calls` |
 | `error`       | `run_id`/none, `message` |
 
-## Current Phase 0 surface
+The Phase 0 spike socket `WS /v1/runs/stream` (anonymous, no agent) remains for the token-stream
+demo.
 
-- `GET /health` — liveness + which DB/runtime profile is active (unauthenticated)
-- `GET /metrics` — Prometheus metrics (unauthenticated)
-- `GET /v1/whoami` — authenticated tenant context
-- `POST /v1/runs` — trigger a run (in-process or enqueued to a worker)
-- `POST /v1/runs/sync` — run and return the full result (non-streaming convenience)
-- `GET /v1/usage` — list captured usage events
-- `WS /v1/runs/stream` — stream run events
+## Current surface (Phases 0–1)
+
+- `GET  /health` — liveness + which DB/runtime profile is active (unauthenticated)
+- `GET  /metrics` — Prometheus metrics (unauthenticated)
+- `GET  /v1/whoami` — authenticated tenant context
+- `POST /v1/agents` · `GET /v1/agents` · `GET|PATCH /v1/agents/{id}` — agent CRUD (immutable versions)
+- `GET  /v1/agents/{id}/versions` — an agent's config versions
+- `POST /v1/agents/{id}/runs` — trigger a run (returns the completed run in-process)
+- `WS   /v1/agents/{id}/runs/stream` — trigger + stream run events
+- `GET  /v1/runs` · `GET /v1/runs/{id}` — list / inspect runs
+- `GET  /v1/runs/{id}/actions` — the append-only action log for a run
+- `POST /v1/runs/{id}/resume` · `POST /v1/runs/{id}/cancel` — lifecycle control
+- `GET  /v1/usage` — list captured usage events (filter by `run_id`)
+- Phase 0 spike: `POST /v1/runs`, `POST /v1/runs/sync`, `WS /v1/runs/stream`

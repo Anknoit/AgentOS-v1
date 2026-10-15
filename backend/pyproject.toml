@@ -26,6 +26,9 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.48b0,<1",
     "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
     "prometheus-client>=0.20,<1",
+    # agent runtime (Phase 1) — LangGraph kernel + checkpointing
+    "langgraph>=0.2,<0.3",
+    "langgraph-checkpoint-sqlite>=2.0,<3",   # dev-fallback checkpointer (ADR-0007)
     # llm (Phase 0 agent-loop spike)
     "openai>=1.40,<2",
     "httpx>=0.27,<0.28",
@@ -68,7 +71,12 @@ target-version = ["py310"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-filterwarnings = ["ignore::DeprecationWarning"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    # LangGraph emits a pending-deprecation notice on import of its JSON serializer.
+    "ignore::langchain_core._api.beta_decorator.LangChainBetaWarning",
+    "ignore:.*allowed_objects.*:Warning",
+]
 
 [tool.mypy]
 python_version = "3.10"

@@ -18,21 +18,31 @@ The profile is chosen by env (`AGENTOS_DATABASE_URL`, `AGENTOS_REDIS_URL`, `AGEN
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
-uv run pytest                      # 13 tests, all offline
+uv run pytest                      # 25 tests, all offline
 uv run agentos serve               # http://127.0.0.1:8787
 # Swagger UI:        http://127.0.0.1:8787/v1/docs
 # Prometheus:        http://127.0.0.1:8787/metrics
 # Dev API key:       dev-local-key   (Authorization: Bearer dev-local-key)
 ```
 
-Try the Phase 0 agent-loop spike:
+Run a Support Desk agent end to end (Phase 1):
 
 ```bash
-curl -s -H "Authorization: Bearer dev-local-key" -H "X-Trace-Id: demo-1" \
-  -H "Content-Type: application/json" -d '{"task":"hello"}' \
-  http://127.0.0.1:8787/v1/runs/sync
-curl -s -H "Authorization: Bearer dev-local-key" http://127.0.0.1:8787/v1/usage
+AUTH='-H "Authorization: Bearer dev-local-key"'
+# 1. create an agent from the Support Desk template
+AID=$(curl -s -H "Authorization: Bearer dev-local-key" -H "Content-Type: application/json" \
+  -d '{"name":"Help Desk","template":"support_desk"}' \
+  http://127.0.0.1:8787/v1/agents | python -c "import sys,json;print(json.load(sys.stdin)['id'])")
+# 2. run it against a task (returns the completed run)
+RID=$(curl -s -H "Authorization: Bearer dev-local-key" -H "X-Trace-Id: demo-1" \
+  -H "Content-Type: application/json" -d '{"task":"I need a refund"}' \
+  http://127.0.0.1:8787/v1/agents/$AID/runs | python -c "import sys,json;print(json.load(sys.stdin)['id'])")
+# 3. inspect the complete audit log and the usage events it generated
+curl -s -H "Authorization: Bearer dev-local-key" http://127.0.0.1:8787/v1/runs/$RID/actions
+curl -s -H "Authorization: Bearer dev-local-key" "http://127.0.0.1:8787/v1/usage?run_id=$RID"
 ```
+
+The Phase 0 agent-loop spike is still available at `POST /v1/runs/sync` and `WS /v1/runs/stream`.
 
 ## Full Postgres stack (RLS + workers)
 
@@ -52,20 +62,30 @@ app/
   config/     settings (pydantic-settings)
   core/       context, logging, tracing (OTel), errors, security, auth, metrics, middleware
   db/         engine, tenant-scoped sessions, base models, Alembic migrations (RLS), seed
-  models/     tenant, user, api_key, usage_event        (grows each phase)
+  models/     tenant, user, api_key, usage_event, agent, agent_version, run, action_log
   schemas/    Pydantic request/response DTOs
-  api/v1/     versioned routers: meta, runs, usage
-  runtime/    LLM providers, the agent loop, the Arq queue seam
+  api/v1/     versioned routers: meta, agents, runs, usage
+  runtime/    LangGraph kernel + checkpointer, built-in tools, templates, run manager,
+              LLM providers, the Phase 0 agent-loop spike, the Arq queue seam, usage store
+  services/   agent CRUD + versioning, run trigger/resume
   metering/   event-bus seam + idempotent usage capture
   connectors/ (Phase 2)  billing/ (Phase 4)  ws/ (streaming)
   main.py     app factory   cli.py   bootstrap.py
 tests/        offline test suite
 ```
 
-## Invariants honored (Phase 0)
+## Invariants honored (Phases 0–1)
 
 - `tenant_id` on every tenant-scoped row; **Postgres RLS** enforces isolation at the data layer
-  (migration `0001_initial`), mirrored by app-layer scoping on the SQLite fallback.
-- Every `usage_event` carries an **idempotency key**; capture dedupes on `(tenant_id, key)`.
+  (migrations `0001`, `0002` — now also `agent`, `agent_version`, `run`, `action_log`), mirrored
+  by app-layer scoping on the SQLite fallback.
+- **Config is data, versioned.** `agent_version` is immutable; a run pins the exact version it
+  executed, so behaviour is reproducible and a bad change rolls back.
+- **Agents run as managed jobs.** A run executes off the request path (in-process manager or Arq
+  worker), survives client disconnect, and is **resumable from its LangGraph checkpoint** across a
+  worker restart (ADR-0007).
+- Every billable step (model call **and** tool call) captures a `usage_event` with a
+  **deterministic idempotency key** (`{run_id}:step{seq}:{kind}`); a replayed step never
+  double-counts. The `action_log` is append-only and idempotent on `(run_id, seq)`.
 - One trace id spans **client → API → worker → provider call** (W3C traceparent across the queue).
 - Observability (structured logs, OTel traces, Prometheus metrics) wired before features.

@@ -79,6 +79,77 @@ async def enqueue_run(*, tenant_id: str, task: str, run_id: str, trace_id: str |
         await pool.close()
 
 
+# ---- Phase 1: durable agent runs on a worker ----
+async def execute_agent_run_job(ctx: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Arq task: execute an agent run (pinned to its agent_version) to completion on a worker.
+
+    The run survives a worker restart: on restart a supervisor re-enqueues unfinished runs and
+    the kernel resumes from the LangGraph checkpoint (``resume=True``).
+    """
+    settings: Settings = ctx.get("settings") or get_settings()
+    set_trace_id(payload.get("trace_id"))
+    set_tenant(TenantContext(tenant_id=payload["tenant_id"]))
+
+    from app.runtime.kernel import execute_run
+    from app.runtime.store import get_run
+    from app.services.agents import get_version
+    from app.services.runs import build_context
+
+    version = await get_version(payload["tenant_id"], payload["agent_version_id"])
+    run = await get_run(payload["tenant_id"], payload["run_id"])
+    resume = run is not None and run.status in ("paused", "running")
+    rc = build_context(
+        tenant_id=payload["tenant_id"],
+        run_id=payload["run_id"],
+        agent_id=payload.get("agent_id"),
+        version=version,
+        trace_id=payload.get("trace_id"),
+        settings=settings,
+    )
+
+    count = 0
+    with attach_traceparent(payload.get("traceparent")):
+        async for _event in execute_run(rc, task=payload["task"], resume=resume):
+            count += 1
+    log.info("worker.agent_run_complete", run_id=payload["run_id"], events=count)
+    return {"run_id": payload["run_id"], "event_count": count}
+
+
+async def enqueue_agent_run(
+    *,
+    tenant_id: str,
+    run_id: str,
+    agent_id: str | None,
+    agent_version_id: str,
+    task: str,
+    trace_id: str | None,
+) -> str:
+    """Enqueue an agent run onto Arq. Requires Redis; raises if not configured."""
+    settings = get_settings()
+    if settings.redis_url is None:
+        raise RuntimeError("enqueue_agent_run requires AGENTOS_REDIS_URL")
+    from arq import create_pool
+    from arq.connections import RedisSettings
+
+    pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    try:
+        job = await pool.enqueue_job(
+            "execute_agent_run_job",
+            {
+                "tenant_id": tenant_id,
+                "run_id": run_id,
+                "agent_id": agent_id,
+                "agent_version_id": agent_version_id,
+                "task": task,
+                "trace_id": trace_id,
+                "traceparent": inject_traceparent(),
+            },
+        )
+        return job.job_id if job else run_id
+    finally:
+        await pool.close()
+
+
 # ---- Arq worker configuration (used by `arq app.runtime.queue.WorkerSettings`) ----
 async def _startup(ctx: dict[str, Any]) -> None:
     settings = get_settings()
@@ -90,7 +161,7 @@ async def _startup(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions = [execute_run_job]
+    functions = [execute_run_job, execute_agent_run_job]
     on_startup = _startup
 
     @staticmethod
