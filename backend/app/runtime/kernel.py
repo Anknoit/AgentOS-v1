@@ -28,11 +28,13 @@ from langgraph.graph import END, START, StateGraph
 
 from app.config.settings import Settings
 from app.connectors.broker import ConnectorBroker, ConnectorGrants
-from app.core.errors import ConflictError, ScopeDeniedError
+from app.core.errors import BudgetExceededError, ConflictError, ScopeDeniedError
 from app.core.logging import get_logger
 from app.core.tracing import start_span
 from app.db.session import tenant_session
-from app.metering.usage import UsageRecord, capture_usage
+from app.metering.credit import CreditController
+from app.metering.pipeline import record_usage
+from app.metering.usage import UsageRecord
 from app.runtime import store
 from app.runtime.checkpointer import checkpointer_cm
 from app.runtime.providers import get_provider
@@ -76,6 +78,9 @@ class RunContext:
     settings: Settings
     # Scoped connector grants from the pinned agent_version (Phase 2). Empty => no connector access.
     connector_bindings: dict = field(default_factory=dict)
+    # Guardrails from the pinned agent_version (max_steps, max_output_tokens, …) — Phase 3 uses
+    # these to estimate an action's cost for prepaid-balance credit control.
+    guardrails: dict = field(default_factory=dict)
 
 
 class AgentState(TypedDict, total=False):
@@ -91,6 +96,13 @@ class AgentState(TypedDict, total=False):
 
 def _build_graph(ctx: RunContext, sink: EventSink, saver: object):
     provider = get_provider(ctx.settings)
+    # One credit controller per run — checks budgets/balance before each billable action.
+    credit = CreditController(
+        tenant_id=ctx.tenant_id,
+        agent_id=ctx.agent_id,
+        run_id=ctx.run_id,
+        trace_id=ctx.trace_id,
+    )
 
     async def triage(state: AgentState) -> AgentState:
         seq = state.get("seq", 1)
@@ -113,19 +125,21 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object):
         usage_event_id: str | None = None
         tool = get_tool(tool_name)
         if tool is not None and tool_name in ctx.tools:
+            # Credit control: authorize before the billable tool call (online charging).
+            await credit.authorize(kind="tool_call", seq=seq)
             result = await tool({"query": state["task"]})
             results = result.output.get("results", [])
-            # One usage_event per tool call (metered now, rated in Phase 3).
-            with start_span("metering.capture_usage", **{"usage.kind": "tool_call"}):
+            # One usage_event per tool call — captured, rated, and posted to the ledger now.
+            with start_span("metering.record_usage", **{"usage.kind": "tool_call"}):
                 async with tenant_session(ctx.tenant_id) as session:
-                    event = await capture_usage(
+                    event = await record_usage(
                         session,
                         UsageRecord(
                             tenant_id=ctx.tenant_id,
                             idempotency_key=f"{ctx.run_id}:step{seq}:tool:{tool_name}",
                             event_type="tool_call",
                             provider="tool",
-                            model=None,
+                            model=tool_name,
                             quantity=result.quantity,
                             unit=result.unit,
                             run_id=ctx.run_id,
@@ -158,6 +172,10 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object):
 
     async def respond(state: AgentState) -> AgentState:
         seq = state.get("seq", 3)
+        # Credit control: authorize before the billable model call. An exhausted hard budget
+        # raises BudgetExceededError here, stopping the agent before the spend.
+        max_out = int(ctx.guardrails.get("max_output_tokens", 0) or 0)
+        await credit.authorize(kind="model_call", estimate_nanos=max_out, seq=seq)
         context_block = "\n".join(f"- {r}" for r in state.get("retrieved", []))
         prompt = (
             f"{ctx.system_prompt}\n\nKnowledge base:\n{context_block}\n\n"
@@ -177,9 +195,9 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object):
                     output_tokens = chunk.usage.output_tokens
         draft = "".join(text_parts)
 
-        with start_span("metering.capture_usage", **{"usage.kind": "model_call"}):
+        with start_span("metering.record_usage", **{"usage.kind": "model_call"}):
             async with tenant_session(ctx.tenant_id) as session:
-                event = await capture_usage(
+                event = await record_usage(
                     session,
                     UsageRecord(
                         tenant_id=ctx.tenant_id,
@@ -245,6 +263,7 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object):
             trace_id=ctx.trace_id,
             grants=ConnectorGrants.from_bindings(bindings),
             settings=ctx.settings,
+            credit=credit,
         )
         granted = 0
 
@@ -335,6 +354,7 @@ async def execute_run(ctx: RunContext, *, task: str, resume: bool = False) -> As
     sink = EventSink()
     result: dict[str, Any] = {}
     error: dict[str, Any] = {}
+    halted: dict[str, Any] = {}
 
     async def _drive() -> None:
         try:
@@ -360,6 +380,9 @@ async def execute_run(ctx: RunContext, *, task: str, resume: bool = False) -> As
                             cfg,
                         )
                 result.update(final or {})
+        except BudgetExceededError as exc:  # hard cap: stop the agent, don't fail it
+            log.warning("run.stopped", run_id=ctx.run_id, reason=str(exc))
+            halted["reason"] = str(exc)
         except Exception as exc:  # surface as a run event, not a 500
             log.error("run.error", run_id=ctx.run_id, error=str(exc))
             error["message"] = str(exc)
@@ -392,6 +415,16 @@ async def execute_run(ctx: RunContext, *, task: str, resume: bool = False) -> As
             ctx.tenant_id, ctx.run_id, status="failed", error=error["message"]
         )
         yield {"type": "error", "run_id": ctx.run_id, "message": error["message"]}
+        return
+
+    if halted:
+        # Hard budget reached: the run is stopped (online credit control), not failed. The spend
+        # already recorded stays on the ledger; the checkpoint is left intact so the run can resume
+        # if the cap is later raised.
+        await store.finalize_run(
+            ctx.tenant_id, ctx.run_id, status="stopped", error=halted["reason"]
+        )
+        yield {"type": "stopped", "run_id": ctx.run_id, "reason": halted["reason"]}
         return
 
     seq = result.get("seq", 1)

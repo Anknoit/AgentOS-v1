@@ -47,6 +47,18 @@ class ScopeDeniedError(ForbiddenError):
     code = "scope_denied"
 
 
+class BudgetExceededError(AppError):
+    """A billable action was refused because a hard spend cap (or prepaid balance) is exhausted.
+
+    Raised by the credit controller *before* the action runs (online credit control, Phase 3), so
+    an agent stops at its limit rather than overrunning it. The kernel catches it and finalizes the
+    run as ``stopped`` with the reason; if surfaced over HTTP it maps to 402 Payment Required.
+    """
+
+    status_code = 402
+    code = "budget_exceeded"
+
+
 class NotFoundError(AppError):
     status_code = 404
     code = "not_found"

@@ -50,7 +50,7 @@ executes. The run is a managed job — disconnecting does not stop it.
 The Phase 0 spike socket `WS /v1/runs/stream` (anonymous, no agent) remains for the token-stream
 demo.
 
-## Current surface (Phases 0–2)
+## Current surface (Phases 0–3)
 
 - `GET  /health` — liveness + which DB/runtime profile is active (unauthenticated)
 - `GET  /metrics` — Prometheus metrics (unauthenticated)
@@ -66,4 +66,14 @@ demo.
 - `GET  /v1/connectors` · `GET /v1/connectors/{key}` — discover connectors + their tools/scopes
 - `GET  /v1/credentials` · `POST /v1/credentials` · `DELETE /v1/credentials/{connector_key}` —
   per-tenant credential vault (secret is **write-only**; never returned)
+- `GET  /v1/spend` — rated spend for the tenant (filter by `run_id`, `agent_id`, `since`)
+- `GET  /v1/spend/agents` — cost per agent (the fleet spend breakdown)
+- `GET  /v1/wallet` — wallet balance (a cached projection of the ledger)
+- `GET  /v1/rate-cards` — the tenant's rate cards (active pricing: per-model, per-tool/connector)
+- `GET  /v1/budgets` · `POST /v1/budgets` · `DELETE /v1/budgets/{id}` — spend caps (soft/hard,
+  tenant/agent scope); a hard cap stops an agent at the limit. Amounts are integer **nanodollars**
+  (1 USD = 1e9) plus a `*_usd` display string; budgets are set in dollars (`limit_usd`).
+- `GET  /v1/alerts` — spend/anomaly alerts (budget breaches, spend spikes, runaway loops)
 - Phase 0 spike: `POST /v1/runs`, `POST /v1/runs/sync`, `WS /v1/runs/stream`
+
+A run halted by a hard budget finalizes with status `stopped` (distinct from `completed`/`failed`).

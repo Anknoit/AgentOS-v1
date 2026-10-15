@@ -23,6 +23,7 @@ log = get_logger(__name__)
 async def seed_dev_tenant(settings: Settings) -> None:
     if not settings.seed_dev_tenant:
         return
+    tenant_id: str | None = None
     async with system_session() as session:
         existing = (await session.execute(select(Tenant).limit(1))).scalar_one_or_none()
         if existing is not None:
@@ -31,6 +32,7 @@ async def seed_dev_tenant(settings: Settings) -> None:
         tenant = Tenant(slug=settings.dev_tenant_slug, name="Dev Tenant")
         session.add(tenant)
         await session.flush()
+        tenant_id = tenant.id
 
         user = User(tenant_id=tenant.id, email=settings.dev_user_email, role="owner")
         session.add(user)
@@ -44,6 +46,13 @@ async def seed_dev_tenant(settings: Settings) -> None:
             key_hash=hash_api_key(settings.dev_api_key, pepper=settings.api_key_pepper),
         )
         session.add(key)
+
+    # Seed the default rate card so the tenant has active pricing from the first run (Phase 3).
+    # Done in a tenant-scoped session so Postgres RLS accepts the write.
+    if tenant_id is not None:
+        from app.services.ratecards import ensure_default_card
+
+        await ensure_default_card(tenant_id)
 
     log.info(
         "seed.dev_tenant",

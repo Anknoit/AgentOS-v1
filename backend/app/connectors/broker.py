@@ -30,7 +30,9 @@ from app.core.errors import ConflictError, ScopeDeniedError
 from app.core.logging import get_logger
 from app.core.tracing import start_span
 from app.db.session import tenant_session
-from app.metering.usage import UsageRecord, capture_usage
+from app.metering.credit import CreditController
+from app.metering.pipeline import record_usage
+from app.metering.usage import UsageRecord
 from app.runtime import store
 from app.services import credentials as vault
 
@@ -79,6 +81,7 @@ class ConnectorBroker:
         grants: ConnectorGrants,
         settings: Settings | None = None,
         registry: ConnectorRegistry | None = None,
+        credit: CreditController | None = None,
     ) -> None:
         self._tenant_id = tenant_id
         self._run_id = run_id
@@ -86,6 +89,7 @@ class ConnectorBroker:
         self._grants = grants
         self._settings = settings
         self._registry = registry or get_registry()
+        self._credit = credit
 
     def _resolve(self, tool: str) -> tuple[str, str]:
         """Return ``(connector_key, required_scope)`` for a qualified tool name."""
@@ -110,6 +114,11 @@ class ConnectorBroker:
             await self._deny(seq, tool, connector_key, required_scope, "connector not granted")
         if required_scope not in self._grants.scopes(connector_key):
             await self._deny(seq, tool, connector_key, required_scope, "scope not granted")
+
+        # Credit control: a granted call still has to clear the budget/balance (online charging).
+        # A hard cap raises BudgetExceededError here, before any credential is touched or metered.
+        if self._credit is not None:
+            await self._credit.authorize(kind="connector_call", seq=seq)
 
         connector = self._registry.get(connector_key)
         if connector is None:  # pragma: no cover - resolve would have raised
@@ -167,9 +176,9 @@ class ConnectorBroker:
         )
 
     async def _meter(self, seq: int, tool: str, connector_key: str, result: ToolResult) -> str:
-        with start_span("metering.capture_usage", **{"usage.kind": "connector_call"}):
+        with start_span("metering.record_usage", **{"usage.kind": "connector_call"}):
             async with tenant_session(self._tenant_id) as session:
-                event = await capture_usage(
+                event = await record_usage(
                     session,
                     UsageRecord(
                         tenant_id=self._tenant_id,

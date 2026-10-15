@@ -18,7 +18,7 @@ The profile is chosen by env (`AGENTOS_DATABASE_URL`, `AGENTOS_REDIS_URL`, `AGEN
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
-uv run pytest                      # 41 tests, all offline
+uv run pytest                      # 55 tests, all offline
 uv run agentos serve               # http://127.0.0.1:8787
 # Swagger UI:        http://127.0.0.1:8787/v1/docs
 # Prometheus:        http://127.0.0.1:8787/metrics
@@ -62,15 +62,18 @@ app/
   config/     settings (pydantic-settings)
   core/       context, logging, tracing (OTel), errors, security, crypto, auth, metrics, middleware
   db/         engine, tenant-scoped sessions, base models, Alembic migrations (RLS), seed
-  models/     tenant, user, api_key, usage_event, agent, agent_version, run, action_log, credential
+  models/     tenant, user, api_key, usage_event, agent, agent_version, run, action_log, credential,
+              rate_card, ledger_entry, wallet, budget, alert
   schemas/    Pydantic request/response DTOs
-  api/v1/     versioned routers: meta, agents, runs, usage, connectors
+  api/v1/     versioned routers: meta, agents, runs, usage, connectors, spend/wallet/budgets/alerts
   runtime/    LangGraph kernel + checkpointer, built-in tools, templates, run manager,
               LLM providers, the Phase 0 agent-loop spike, the Arq queue seam, usage store
   connectors/ MCP-first connector framework: capabilities, specs, MCP client + sessions,
               registry, broker (scope enforcement), built-in Slack/CRM/HTTP + generic MCP
-  services/   agent CRUD + versioning, run trigger/resume, connector discovery, credential vault
-  metering/   event-bus seam + idempotent usage capture
+  services/   agent CRUD + versioning, run trigger/resume, connector discovery, credential vault,
+              rate cards, spend aggregation, budgets
+  metering/   money (nanodollars), rating engine, pipeline (capture→rate→ledger→wallet→anomaly),
+              credit control (budgets), anomaly detection, event-bus seam + idempotent capture
   billing/    (Phase 4)  ws/ (streaming)
   main.py     app factory   cli.py   bootstrap.py
 tests/        offline test suite
@@ -106,11 +109,34 @@ The `action_log` shows each `connector_call` (granted and denied); an ungranted 
 and logged. Connect any **third-party MCP server** via the generic `mcp` connector (store a
 credential whose `provider_meta.url` is the server URL).
 
-## Invariants honored (Phases 0–2)
+## Metering, rating & budgets (Phase 3)
+
+Every billable step (model, tool, connector) is captured, **rated** against the active rate card,
+and posted to an **append-only ledger** in the same transaction (ADR-0009). Money is exact integer
+nanodollars; the wallet is a cached projection of the ledger. A **hard budget stops an agent at its
+cap** (online credit control); a soft budget alerts.
+
+```bash
+# set a hard cap on an agent, run it, and watch it stop at the limit
+curl -s -H "Authorization: Bearer dev-local-key" -H "Content-Type: application/json" \
+  -d '{"name":"cap","scope":"agent","scope_id":"'$AID'","limit_usd":"0.0005","enforcement":"hard"}' \
+  http://127.0.0.1:8787/v1/budgets
+# rated spend — per run, per agent, and the tenant total (cost == price in BYO, markup 0)
+curl -s -H "Authorization: Bearer dev-local-key" "http://127.0.0.1:8787/v1/spend?run_id=$RID"
+curl -s -H "Authorization: Bearer dev-local-key" http://127.0.0.1:8787/v1/spend/agents
+curl -s -H "Authorization: Bearer dev-local-key" http://127.0.0.1:8787/v1/wallet
+curl -s -H "Authorization: Bearer dev-local-key" http://127.0.0.1:8787/v1/rate-cards
+curl -s -H "Authorization: Bearer dev-local-key" http://127.0.0.1:8787/v1/alerts
+```
+
+A run blocked by a hard cap finalizes with status `stopped` (not `failed`), logs a `budget_hard`
+alert, and leaves its checkpoint intact so it can resume if the cap is raised.
+
+## Invariants honored (Phases 0–3)
 
 - `tenant_id` on every tenant-scoped row; **Postgres RLS** enforces isolation at the data layer
-  (migrations `0001`, `0002` — now also `agent`, `agent_version`, `run`, `action_log`), mirrored
-  by app-layer scoping on the SQLite fallback.
+  (migrations `0001`–`0004` — now also `rate_card`, `ledger_entry`, `wallet`, `budget`, `alert`),
+  mirrored by app-layer scoping on the SQLite fallback.
 - **Config is data, versioned.** `agent_version` is immutable; a run pins the exact version it
   executed, so behaviour is reproducible and a bad change rolls back.
 - **Agents run as managed jobs.** A run executes off the request path (in-process manager or Arq
@@ -125,4 +151,8 @@ credential whose `provider_meta.url` is the server URL).
   usage event, and audits the call — a denied scope is refused and logged (ADR-0008).
 - **Connector secrets are encrypted per tenant** (HKDF-derived Fernet key), decrypted only at call
   time, never returned by the API, never logged.
+- **Money is exact.** Every rated event posts one immutable `ledger_entry` (unique on
+  `(tenant_id, usage_event_id)`), priced in integer nanodollars against a versioned rate card;
+  balances are projections, rating is exactly-once, and a hard budget stops an agent at its cap —
+  **checked before each billable action** (ADR-0009).
 - Observability (structured logs, OTel traces, Prometheus metrics) wired before features.

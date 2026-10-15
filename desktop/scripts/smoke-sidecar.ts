@@ -10,7 +10,9 @@
  *      one model_call and one tool_call usage event, all carrying the client trace id,
  *   6. Phase 2 — store Slack + CRM credentials, run a connector-wired Support Desk agent, and
  *      confirm it reads/writes the CRM and posts to Slack (three metered connector calls),
- *   7. tear the sidecar down cleanly.
+ *   7. Phase 3 — confirm each billable step is rated into the ledger (spend per run/agent, wallet
+ *      projection, active rate card) and that a hard budget stops an agent at its cap,
+ *   8. tear the sidecar down cleanly.
  *
  * Run: `npm run smoke:sidecar` (from desktop/).
  */
@@ -157,21 +159,74 @@ async function main(): Promise<void> {
       connectorUsage.length === 3 &&
       connUsage.every((u: { trace_id: string }) => u.trace_id === traceId);
 
-    if (spikeOk && agentOk && connectorOk) {
+    // --- Phase 3: metering, rating & budgets ---
+    // Every billable step of the connected run was rated and posted to the ledger.
+    const runSpend = await getJson(`/v1/spend?run_id=${connRun.id}`);
+    const agentSpend = await getJson("/v1/spend/agents");
+    const tenantSpend = await getJson("/v1/spend");
+    const wallet = await getJson("/v1/wallet");
+    const cards = await getJson("/v1/rate-cards");
+    console.log(
+      `[smoke] connected run spend ${runSpend.price_usd} over ${runSpend.event_count} events; ` +
+        `wallet ${wallet.balance_usd}`,
+    );
+
+    // A hard budget stops an agent at its cap (online credit control).
+    const cappedAgent = await postJson("/v1/agents", {
+      name: "Smoke Capped Desk",
+      template: "support_desk",
+    });
+    await postJson("/v1/budgets", {
+      name: "smoke-cap",
+      scope: "agent",
+      scope_id: cappedAgent.id,
+      period: "total",
+      limit_usd: "0.0005",
+      enforcement: "hard",
+    });
+    const cappedRun = await postJson(`/v1/agents/${cappedAgent.id}/runs`, {
+      task: "I need a refund on my order",
+    });
+    const cappedAlerts = await getJson(`/v1/alerts?run_id=${cappedRun.id}`);
+    console.log(
+      `[smoke] capped run ${cappedRun.id} status=${cappedRun.status} ` +
+        `alerts=[${cappedAlerts.map((a: { kind: string }) => a.kind).join(", ")}]`,
+    );
+
+    const meteringOk =
+      runSpend.event_count >= 1 &&
+      runSpend.price_nanos > 0 &&
+      // BYO default card: price == cost (reconciles with provider numbers).
+      runSpend.price_nanos === runSpend.cost_nanos &&
+      // the wallet is the ledger's negative projection (no top-ups in BYO)
+      wallet.balance_nanos === -tenantSpend.price_nanos &&
+      cards.some((c: { name: string; is_active: boolean }) => c.name === "default" && c.is_active) &&
+      agentSpend.some(
+        (a: { agent_id: string; price_nanos: number }) =>
+          a.agent_id === connAgent.id && a.price_nanos > 0,
+      ) &&
+      // the hard cap stopped the agent (not failed) and logged it
+      cappedRun.status === "stopped" &&
+      cappedAlerts.some((a: { kind: string }) => a.kind === "budget_hard");
+
+    if (spikeOk && agentOk && connectorOk && meteringOk) {
       console.log(
         `[smoke] PASS — Support Desk run ${run.id}: ${actions.length}-step audit log, ` +
           `usage [${usageKinds.join(", ")}] all tagged trace_id ${traceId}; ` +
-          `connected run ${connRun.id}: 3 metered connector calls to Slack + CRM`,
+          `connected run ${connRun.id}: 3 metered connector calls to Slack + CRM; ` +
+          `rated spend ${runSpend.price_usd}, hard cap stopped run ${cappedRun.id}`,
       );
     } else {
       console.error("[smoke] FAIL — unexpected result", {
         spikeOk,
         agentOk,
         connectorOk,
+        meteringOk,
         run,
         actionTypes,
         usageKinds,
         connectorTools,
+        cappedStatus: cappedRun.status,
       });
       exitCode = 1;
     }

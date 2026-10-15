@@ -34,6 +34,7 @@ def build_context(
         trace_id=trace_id,
         settings=settings,
         connector_bindings=dict(version.connector_bindings or {}),
+        guardrails=dict(version.guardrails or {}),
     )
 
 
