@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # The backend exposes Prometheus metrics at /metrics.
+  - job_name: agentos-backend
+    static_configs:
+      - targets: ["host.docker.internal:8787"]
+
+  # Metrics the OTel collector re-exports.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]

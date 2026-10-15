@@ -1,0 +1,3 @@
+import { createFileRoute } from '@tanstack/react-router';
+import { Onboarding } from '@/components/agentos/onboarding';
+export const Route = createFileRoute('/onboarding')({head:()=>({meta:[{title:'Welcome to AgentOS · AgentOS'},{name:'description',content:'Create a workspace, choose an agent, connect tools, and launch.'},{property:'og:title',content:'Welcome to AgentOS · AgentOS'},{property:'og:description',content:'Create a workspace, choose an agent, connect tools, and launch.'},{property:'og:type',content:'website'},{name:'twitter:card',content:'summary_large_image'}]}),component:Onboarding});

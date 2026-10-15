@@ -1,33 +1,26 @@
 {
-  "name": "Python 3",
-  // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+  "name": "AgentOS",
   "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" }
+  },
   "customizations": {
-    "codespaces": {
-      "openFiles": [
-        "README.md",
-        "agentos/app/ui/dashboard.py"
-      ]
-    },
     "vscode": {
-      "settings": {},
-      "extensions": [
-        "ms-python.python",
-        "ms-python.vscode-pylance"
-      ]
+      "settings": {
+        "python.defaultInterpreterPath": "backend/.venv/bin/python"
+      },
+      "extensions": ["ms-python.python", "ms-python.vscode-pylance", "charliermarsh.ruff"]
     }
   },
-  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
+  "updateContentCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && cd backend && $HOME/.local/bin/uv venv && $HOME/.local/bin/uv pip install -e '.[dev]' && echo '✅ backend deps installed'",
   "postAttachCommand": {
-    "server": "streamlit run agentos/app/ui/dashboard.py --server.enableCORS false --server.enableXsrfProtection false"
+    "backend": "cd backend && $HOME/.local/bin/uv run agentos serve"
   },
   "portsAttributes": {
-    "8501": {
-      "label": "Application",
-      "onAutoForward": "openPreview"
+    "8787": {
+      "label": "AgentOS backend",
+      "onAutoForward": "notify"
     }
   },
-  "forwardPorts": [
-    8501
-  ]
+  "forwardPorts": [8787]
 }

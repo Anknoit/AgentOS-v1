@@ -1,25 +1,10 @@
-# Core web framework
-fastapi==0.111.0
-uvicorn[standard]==0.30.1
-
-# Data validation & settings
-pydantic==2.7.1
-pydantic-settings==2.3.0
-
-# Database (future-ready, not forced yet)
-sqlalchemy==2.0.30
-# psycopg2-binary==2.9.9
-psycopg[binary]
-
-
-# Caching / short-term memory
-redis==5.0.4
-
-# Utilities
-python-dotenv==1.0.1
-
-
-openai
-tenacity==8.3.0
-
-streamlit
+# The backend now lives in backend/ and declares its dependencies in backend/pyproject.toml.
+# Install with uv (recommended):
+#
+#   cd backend && uv venv && uv pip install -e ".[dev]"
+#
+# or with pip:
+#
+#   cd backend && pip install -e ".[dev]"
+#
+# This file is kept only as a pointer for tools that look for a root requirements.txt.

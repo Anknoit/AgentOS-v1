@@ -1,0 +1,81 @@
+# AgentOS — local development stack.
+#
+#   docker compose -f infra/docker-compose.yml up -d           # core: postgres, redis, nats
+#   docker compose -f infra/docker-compose.yml --profile obs up -d   # + otel-collector, prometheus, grafana
+#
+# The backend reads its connection URLs from env (see backend/.env.example); the defaults
+# below match those. With none of this running, the backend falls back to SQLite + an
+# in-process runtime (see docs/adr/0006-dev-db-fallback.md).
+
+name: agentos
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agentos
+      POSTGRES_PASSWORD: agentos
+      POSTGRES_DB: agentos
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentos -d agentos"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js"] # JetStream on, for durable/replayable metering when we need it
+    ports:
+      - "4222:4222" # client
+      - "8222:8222" # monitoring
+
+  # ---- Observability (opt-in): docker compose --profile obs up -d ----
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    profiles: ["obs"]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: ["obs"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: ["obs"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:
+  redisdata:

@@ -1,0 +1,13 @@
+import type { ReactNode } from 'react';
+import { AudioLines, Headphones, MessagesSquare, Network, UsersRound, Workflow, ArrowUpRight } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+export function Contour({large=false}: {large?: boolean}) { return <svg className={`contour ${large?'contour-large':''}`} viewBox="0 0 650 390" fill="none" aria-hidden="true"><g>{Array.from({length:24},(_,i)=><path key={i} d={`M ${220+i*16} -40 C ${80+i*17} ${95+i*2}, ${650-i*9} ${65+i*8}, ${370+i*13} ${270+i*9} S ${310+i*15} 450, 700 460`} />)}</g><path className="contour-tick" d="M 490 100 h 12 m -6 -6 v 12 M 580 260 h 12 m -6 -6 v 12"/></svg>; }
+export function Brand({small=false}: {small?: boolean}) { return <div className={`brand ${small?'brand-small':''}`}><span className="brand-mark"><Workflow size={23}/></span>Agent<span className="brand-os">OS</span><span className="brand-period">®</span></div>; }
+export function RoleIcon({name,size=22}: {name:string;size?:number}) { const Icon = name==='support'?Headphones:name==='reception'?AudioLines:name==='social'?MessagesSquare:name==='hr'?UsersRound:Network; return <Icon size={size} strokeWidth={1.4}/>; }
+export function Status({status}: {status:string}) {return <span className={`status status-${status.toLowerCase()}`}><span/>{status}</span>;}
+export function PageHeader({number,title,description,children}: {number:string;title:string;description:string;children?:ReactNode}) {return <div className="page-heading"><div><div className="eyebrow">{number}</div><h1>{title}</h1><p>{description}</p></div>{children&&<div className="heading-action">{children}</div>}</div>;}
+export function SectionTitle({number,title,children}: {number:string;title:string;children?:ReactNode}) {return <div className="section-heading"><h2><span className="section-number">{number}</span>{title}</h2>{children}</div>;}
+export function Field({label,children,hint}: {label:string;children:ReactNode;hint?:string}) {return <label className="field"><span>{label}</span>{children}{hint&&<small>{hint}</small>}</label>;}
+export function EmptyState({title,children}: {title:string;children?:ReactNode}) {return <div className="empty-state"><Network size={32}/><h3>{title}</h3>{children}</div>;}
+export function TextAction({children,onClick}: {children:ReactNode;onClick?:()=>void}) {return <Button variant="ghost" size="sm" onClick={onClick}>{children}<ArrowUpRight size={14}/></Button>;}
+export function downloadFile(name:string, content:string, type='text/csv') {const url=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);}

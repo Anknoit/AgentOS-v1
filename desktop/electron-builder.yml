@@ -1,0 +1,45 @@
+# Packaging for the AgentOS desktop shell.
+#
+# Ships the compiled Electron shell plus the FastAPI backend as a PyInstaller binary (built
+# separately into backend/dist/agentos-backend). The main process spawns that binary as the
+# local sidecar (see src/main/sidecar.ts -> packagedBinary()).
+
+appId: com.agentos.desktop
+productName: AgentOS
+copyright: AgentOS
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - package.json
+  - "!**/*.map"
+
+# The PyInstaller-built backend lands at resources/backend/agentos-backend.
+extraResources:
+  - from: ../backend/dist
+    to: backend
+    filter:
+      - "**/*"
+
+asar: true
+
+# Auto-update feed (stub: fill in for a real release channel).
+# publish:
+#   - provider: generic
+#     url: https://releases.example.com/agentos
+
+linux:
+  target: [AppImage]
+  category: Utility
+  artifactName: ${productName}-${version}.${ext}
+
+win:
+  target: [nsis]
+  artifactName: ${productName}-${version}-Setup.${ext}
+
+mac:
+  target: [dmg]
+  category: public.app-category.developer-tools

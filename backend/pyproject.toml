@@ -1,0 +1,75 @@
+[project]
+name = "agentos-backend"
+version = "0.0.0"
+description = "AgentOS control plane — FastAPI service (runs as Electron sidecar and as the cloud service)"
+requires-python = ">=3.10"
+dependencies = [
+    # web
+    "fastapi>=0.115,<0.116",
+    "uvicorn[standard]>=0.30,<0.31",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.5,<3",
+    "websockets>=12,<13",
+    # db
+    "sqlalchemy[asyncio]>=2.0.35,<2.1",
+    "alembic>=1.13,<2",
+    "asyncpg>=0.29,<0.31",     # Postgres (ships)
+    "aiosqlite>=0.20,<0.21",   # SQLite dev-fallback (ADR-0006)
+    "greenlet>=3,<4",
+    # infra clients
+    "redis>=5,<6",
+    "arq>=0.26,<0.27",
+    # observability
+    "structlog>=24.1,<25",
+    "opentelemetry-api>=1.27,<2",
+    "opentelemetry-sdk>=1.27,<2",
+    "opentelemetry-instrumentation-fastapi>=0.48b0,<1",
+    "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
+    "prometheus-client>=0.20,<1",
+    # llm (Phase 0 agent-loop spike)
+    "openai>=1.40,<2",
+    "httpx>=0.27,<0.28",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.23,<0.25",
+    "ruff>=0.6,<1",
+    "black>=24,<25",
+    "mypy>=1.11,<2",
+]
+
+[project.scripts]
+agentos = "app.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic migrations are DDL-dense; long column lines read better unwrapped.
+"app/db/migrations/*" = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true

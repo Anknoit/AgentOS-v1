@@ -1,0 +1,3 @@
+import { createFileRoute } from '@tanstack/react-router';
+import { Connectors } from '@/components/agentos/connectors';
+export const Route = createFileRoute('/connectors')({head:()=>({meta:[{title:'Connect your tools · AgentOS'},{name:'description',content:'Give your agents scoped access to the systems you already run.'},{property:'og:title',content:'Connect your tools · AgentOS'},{property:'og:description',content:'Give your agents scoped access to the systems you already run.'},{property:'og:type',content:'website'},{name:'twitter:card',content:'summary_large_image'}]}),component:Connectors});

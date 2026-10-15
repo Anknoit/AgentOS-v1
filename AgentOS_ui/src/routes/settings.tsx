@@ -1,0 +1,3 @@
+import { createFileRoute } from '@tanstack/react-router';
+import { Settings } from '@/components/agentos/settings';
+export const Route = createFileRoute('/settings')({head:()=>({meta:[{title:'Workspace settings · AgentOS'},{name:'description',content:'Manage your AgentOS workspace, members, preferences, and billing.'},{property:'og:title',content:'Workspace settings · AgentOS'},{property:'og:description',content:'Manage your AgentOS workspace, members, preferences, and billing.'},{property:'og:type',content:'website'},{name:'twitter:card',content:'summary_large_image'}]}),component:Settings});

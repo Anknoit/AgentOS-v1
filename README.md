@@ -1,253 +1,233 @@
 <img src = "agentOs.png">
 <br>
 
-# 🚀 AgentOS — A Safe, Ontology-Driven Agentic Decision Platform
+# AgentOS — The Control Plane for Your AI Agent Workforce
 
-> **AgentOS is not a chatbot.  
-It is a production-grade decision engine that combines deterministic automation, bounded AI reasoning, and human-in-the-loop control for high-stake systems.**
-
----
-
-## 🧠 What Is AgentOS?
-
-**AgentOS** is a universal, industry-agnostic **agentic decision platform** designed to operate in complex, real-world environments such as **Telecom, Energy, Finance, Manufacturing, and Operations**.
-
-Instead of relying blindly on Large Language Models (LLMs), AgentOS is built on a **structured ontology**, **deterministic safety policies**, and **explicit execution control**, making it suitable for **enterprise and mission-critical use cases**.
+> **AgentOS is payroll and mission-control for AI agents.**
+> One place to deploy agents, connect them to the tools you already run, and pay
+> for everything they do on a single metered balance — with real-time cost control
+> and a full audit trail on every action.
 
 ---
 
-## ✨ Why AgentOS Exists
+## What AgentOS Is
 
-Modern systems generate:
-- Thousands of signals
-- Endless dashboards
-- Constant alerts
+AgentOS is a **control plane for a company's AI agent workforce**. Teams use it to:
 
-Yet the real problem remains unanswered:
+- **Deploy** role-based agents — Support Desk, Receptionist, Social Media, HR — from templates.
+- **Connect** those agents to existing systems (Slack, CRM, email, calendar, voice, or any MCP/HTTP tool) with scoped, per-tenant credentials.
+- **Pay** for all of them on one prepaid balance, metered per unit of work and settled into a single invoice.
 
-> **“What should we do next — and is it safe?”**
+The value — agents running 24/7, every billable action metered, spend settled — only
+exists if the core runs **always-on and server-side**. So AgentOS is built
+**backend-first**: a FastAPI service owns the runtime, metering, and settlement, and the
+desktop app is a thin client onto it.
 
-AgentOS solves this by:
-- Converting signals into **decisions**
-- Explaining *why* a decision was made
-- Enforcing safety constraints
-- Automating only when allowed
-- Keeping humans in control
+> AgentOS is **not** a chatbot and not a demo. It is the infrastructure that makes an
+> agent fleet observable, governable, and billable in production.
 
 ---
 
-## 🏗️ Core Design Principles
+## The Problem
 
-### 1️⃣ Automation First, AI Second
-LLMs are **assistive**, not authoritative.
+Running one agent is easy. Running a **fleet** is not:
 
-- ❌ No hallucinated actions
-- ❌ No constraint bypass
-- ❌ No blind execution
-- ✅ Deterministic rules always win
+- Every agent burns tokens and calls paid tools — but spend is scattered across provider dashboards.
+- Credentials and permissions sprawl, with no single place to scope or audit them.
+- Nothing stops a runaway loop before it drains a budget.
+- There is no single bill, no single balance, no single point of control.
 
----
+AgentOS answers one question for the whole fleet:
 
-### 2️⃣ Ontology-Driven Reasoning
-The agent understands the world through a **shared structure**, not free-form text.
-
-**Ontology Concepts**
-- **Entity** — what the decision is about
-- **State** — current condition
-- **Signals** — what changed
-- **Constraints** — what is forbidden
-- **Actions** — what can be done
-- **Outcomes** — what happened after
-
-This makes decisions:
-- Explainable
-- Auditable
-- Repeatable
+> **"What is every agent doing, what is it costing, and can we stop it before it overspends?"**
 
 ---
 
-### 3️⃣ Human-in-the-Loop by Design
-High-stake systems require accountability.
+## Core Design Principles
 
-| Action Type | Execution |
-|------------|----------|
-| WAIT | Autonomous |
-| NOTIFY | Autonomous |
-| RECOMMEND | Human decision |
-| EXECUTE | Conditional |
-| ESCALATE | Human required |
+These tenets hold in every phase; the roadmap is how they get built in.
 
-**AgentOS assists humans — it never replaces them.**
-
----
-
-## 🧩 Architecture Overview
-
-External Signals (APIs / Simulators) -->
-Industry Adapters
--->
-Core Ontology Layer
--->
-Decision Engine (NBA)
--->
-Safety & Policy Gates
--->
-Execution Hooks (Webhooks)
--->
-Outcome Feedback
-
-
+- **Backend-first, one backend, two modes.** The same FastAPI codebase runs as a local sidecar the desktop app spawns (dev and single-tenant) *and* as the multi-tenant cloud service. The client points at a configurable backend URL and never assumes which it is talking to.
+- **Control plane vs. data plane.** Managing agents and reading state is separate from agents doing work; a flood of agent runs never takes down the management console.
+- **Agents run as managed jobs, not request threads.** Work is enqueued and executed by stateless workers, so an agent survives a client disconnect, a deploy, or a crash.
+- **Event-driven metering, decoupled from execution.** Every billable action emits a usage event onto a bus; rating and ledger writes happen downstream, off the hot path.
+- **Exactly-once accounting.** Every usage event carries an idempotency key; a retried model call or replayed event must never double-bill.
+- **Append-only ledger; balances are projections.** Money movements are immutable entries; a wallet balance is a derived, cached view — auditable by construction.
+- **Real-time credit control.** Before a billable action, the runtime checks the wallet against budgets and balance and can throttle or stop — the telecom online-charging pattern, not after-the-fact reporting.
+- **Tenant isolation everywhere.** `tenant_id` is on every row, event, and log line, enforced at the data layer. Credentials are encrypted per tenant.
+- **Config is data, and versioned.** An agent definition is a versioned record; a run pins the exact version it executed, so changes are diffable and rollback-able.
+- **Stable, versioned API contract.** The client and the separately-built UI depend only on a versioned REST + WebSocket surface with a generated typed SDK.
+- **Observability is not optional.** Structured logs, metrics, and traces from day one — one trace id spanning client → API → worker → provider.
 
 ---
 
-## 🧠 The Decision Engine (NBA)
+## Architecture Overview
 
-At the heart of AgentOS is the **Next-Best-Action (NBA) Engine**.
+The desktop client talks **only** to the FastAPI gateway. Every core service — the
+runtime, connectors, and the charging core — lives behind it, server-side, and runs
+whether or not the desktop app is open.
 
-It answers:
-- How urgent is this?
-- How risky is acting?
-- What actions are allowed?
-- Should we wait, recommend, execute, or escalate?
+```
+            ┌───────────────────────┐
+            │   Electron Desktop     │   thin client · configurable backend URL
+            │        Client          │
+            └───────────┬───────────┘
+                        │  REST + WebSocket (versioned, typed SDK)
+            ┌───────────▼───────────┐
+            │     FastAPI Gateway    │
+            └───────────┬───────────┘
+      ┌─────────────────┼─────────────────────────────┐
+      ▼                 ▼                             ▼
+┌───────────┐   ┌───────────────┐          ┌────────────────────┐
+│  Agent    │   │  Connector    │          │   Charging Core     │
+│  Runtime  │──▶│  Framework    │          │  metering · rating  │
+│ (workers) │   │  (MCP/OAuth)  │          │  wallet · ledger    │
+└─────┬─────┘   └───────────────┘          └─────────▲──────────┘
+      │  usage_event (per billable action)           │
+      └──────────────── event bus ───────────────────┘
+                     (real-time credit control: check wallet before each action)
+```
 
-Every decision includes:
-- Confidence score
-- Risk level
-- Human-readable reasoning
-- Audit trail
-
----
-
-## 📡 Telecom Specialization (First Vertical)
-
-AgentOS includes a **production-ready Telecom specialization**, modeled exactly how real NOCs operate.
-
-### Supported Use Cases
-- Alarm storm triage
-- SLA protection
-- Safe self-healing
-- NOC decision support
-- Incident post-mortems
-
-### Why Telecom Works So Well
-- Signal-heavy
-- High blast radius
-- Strict constraints
-- Clear ROI for automation
+**The charging loop is the distinctive part:** the runtime emits a usage event for
+every billable action → metering rates it against the rate card → the wallet is
+debited — and the runtime checks the wallet's balance and budget *before* each action.
 
 ---
 
-## 🛡️ Safe Self-Healing (Not Blind Automation)
+## Core Data Model
 
-AgentOS executes automation **only if all conditions are met**:
+Every row carries `tenant_id`. The highlighted entities are the heart of the moat —
+their shape is fixed before breadth is built.
 
-✔ Known SOP  
-✔ Low blast radius  
-✔ Non-peak hours  
-✔ No VIP impact  
-✔ High confidence  
-✔ Explicitly whitelisted  
-
-Otherwise:
-👉 Automation is blocked  
-👉 Humans stay in control  
-
-> **AgentOS automates decision timing — not actions blindly.**
-
----
-
-## 🧪 Live NOC Simulation
-
-The repository includes:
-- Telecom incident simulators
-- Realistic decision flows
-- NOC dashboard (Streamlit)
-- Execution hooks (webhooks)
-- Outcome tracking
-
-This allows:
-- End-to-end demos
-- Replayable scenarios
-- Policy testing
-- Training & validation
+| Entity | What it holds |
+|---|---|
+| `tenant` | Organization account — root of isolation and billing |
+| `user` | People in a tenant, with roles for RBAC |
+| `agent` | A logical agent ("employee") — name, role, status, current version |
+| `agent_version` | Versioned, immutable config: model, tools, guardrails, knowledge, connector bindings |
+| `run` | One execution of an agent — pins its `agent_version`, status, trace id |
+| `action_log` | Every step and tool call in a run — append-only audit trail |
+| **`usage_event`** | **One billable unit of work — provider, model, quantity, run, idempotency key** |
+| **`rate_card`** | **Pricing — per-model token prices, per-tool fees, platform fee, effective dates** |
+| **`ledger_entry`** | **An immutable money movement — refs a usage event, top-up, or invoice** |
+| `wallet` | Tenant balance — cached running total, currency, budgets attached |
+| `budget` | A cap or limit — scope, period, hard/soft, action on breach |
+| `connector` | An integration instance — type and granted scopes |
+| `credential` | Encrypted per-tenant secret for a connector |
+| `invoice` | A billing statement — line items rolled from the ledger |
 
 ---
 
-## 📊 Persistence & Auditability
+## Tech Stack
 
-Every decision and outcome is stored.
+Boring, proven components by default; the only exotic choices are where the charging
+core or scale demands them.
 
-You can:
-- Replay decisions
-- Analyze failures
-- Measure impact
-- Prove compliance
-
-This is essential for:
-- Regulated industries
-- Enterprise adoption
-- Trust building
-
----
-
-## 🧠 Why AgentOS Is Different
-
-| Typical AI Agents | AgentOS |
-|------------------|--------|
-| Text-based | Ontology-driven |
-| Black-box | Explainable |
-| LLM-dependent | Deterministic core |
-| Autonomous | Human-controlled |
-| Demo-grade | Production-ready |
+| Layer | Choice | Why |
+|---|---|---|
+| Desktop shell | **Electron** + secure IPC | Cross-platform management console; web UI fits building UI with AI |
+| API backend | **FastAPI** (async, Pydantic) | Typed, async, OpenAPI for free — generates the client/UI SDK |
+| Agent orchestration | **LangGraph** | Stateful graphs, checkpointing, human-in-the-loop |
+| Execution / workers | **Temporal** (recommended) | Durable, resumable long-running workflows; Celery/Arq a lighter v0 |
+| Primary database | **Postgres** | Config, ledger, tenancy in one store; row-level security for isolation |
+| Cache + credit control | **Redis** | Real-time balance/budget checks, rate limits, locks on the hot path |
+| Event bus | **NATS → Kafka** | Usage-event transport; Kafka for durable, replayable metering at scale |
+| Usage store | **ClickHouse** | High-volume usage events and spend analytics (Timescale a Postgres-native alternative) |
+| Credential vault | **Postgres + envelope encryption (KMS)** | Per-tenant secrets encrypted at rest |
+| Payments | **Stripe** (Billing + Connect) | Top-ups, invoicing, payouts — don't build a payment rail |
+| Connector protocol | **MCP** | Reuse the growing tool-integration ecosystem |
+| Auth & identity | **OIDC** (Clerk / Auth0) | Tenants, users, API keys now; SSO/SAML later |
+| Observability | **OpenTelemetry + Prometheus/Grafana** | One trace id from client → API → worker → provider |
+| Packaging | **electron-builder + FastAPI sidecar (PyInstaller)** | Ships client and local backend together; auto-update |
 
 ---
 
-## 🧭 Industry Expansion
+## Roadmap
 
-AgentOS is built as a **platform**, not a single solution.
+Phased to de-risk the metering/settlement moat while shipping a working agent early.
+Phases are ordered, not dated.
 
-New industries plug in via:
-- Adapters
-- Policies
-- SOP registries
+| Phase | Goal |
+|---|---|
+| **0 — Foundations** | Monorepo, Electron ↔ backend contract, auth + multi-tenancy skeleton, observability baseline, de-risk spikes |
+| **1 — Agent runtime MVP** | One real agent end to end — configured, run server-side, fully logged, metering captured (not yet billed) |
+| **2 — Connector framework** | Scoped capabilities, connector SDK + registry (MCP), credential vault, 2–3 real connectors |
+| **3 — Metering, rating & budgets** | Accurate per-agent cost and real-time budgets on your own keys — **the start of the moat** |
+| **4 — Settlement & payments** | Prepaid wallet, Stripe, provider pass-through + markup, one invoice, reconciliation — **the payment path** |
+| **5 — Scale & reliability** | Horizontal workers, Kafka exactly-once ingestion, multi-provider routing, voice, HA/DR |
+| **6 — Enterprise & hardening** | SOC 2, RBAC + SSO/SAML, fraud controls, agent/connector marketplace, self-hosted packaging |
 
-Planned specializations:
-- 🔌 Telecom Core (AAA / Diameter / PCRF)
-- ⚡ Energy & Trading
-- 🏭 Manufacturing & IoT
-- 🏦 Finance & Risk Ops
-
----
-
-## 🚦 Current Status
-
-✔ Core Agent Engine  
-✔ Ontology Layer  
-✔ Safe LLM Integration (Mocked)  
-✔ Persistence Layer  
-✔ Outcome Feedback Loop  
-✔ Telecom Specialization  
-✔ Live NOC Demo  
-✔ Execution Hooks  
-
-**This is a deployable MVP — not a toy project.**
+**Sequencing principle:** ship a usable, connected agent by Phase 2 and the defensible
+core (rating, budgets, settlement) by Phase 4 — with metering instrumented from Phase 1,
+built on real usage rather than polishing breadth before the moat exists.
 
 ---
 
-## 🎯 One-Line Summary
+## Starter Agent Templates
 
-> **AgentOS is a universal, ontology-driven decision platform that safely combines automation, AI reasoning, and human judgment for high-stake systems.**
+AgentOS ships with four role templates, deployable from a gallery and tuned in a focused editor:
+
+- **Support Desk** — answers customer questions and resolves tickets · Helpdesk, Slack, KB
+- **Receptionist** — greets, routes, and books across voice and chat · Telephony, Calendar
+- **Social Media** — drafts, schedules, and replies across channels · X, LinkedIn, Buffer
+- **HR Agent** — handles onboarding, policy Q&A, and leave requests · HRIS, Email, Docs
+
+Each agent is configured through Identity, Behavior, Knowledge, Tools & Connectors,
+Guardrails, Schedule, and Budget — with a live test console and a running cost estimate.
 
 ---
 
-## 📜 License
+## Repository Layout
+
+- `AgentOS — Development Plan.docx` — the backend-first, phased engineering plan (the source of truth).
+- `BUILD_PLAN.md` — the sequential, executable build plan derived from the development plan.
+- `AgentOS-UI-Prompt.md` — a build-ready specification for the product UI (design system and every core screen).
+- `backend/` — the FastAPI service (runtime, metering, settlement). Runs as the Electron sidecar **and** the cloud service. See [backend/README.md](backend/README.md).
+- `desktop/` — the Electron shell: spawns + supervises the backend sidecar, secure IPC, auto-update. See [desktop/README.md](desktop/README.md).
+- `shared/` — the versioned API contract (OpenAPI) + generated client SDK. See [shared/README.md](shared/README.md).
+- `AgentOS_ui/` — the web UI (TanStack Start), a thin client over the versioned API.
+- `infra/` — docker-compose dev stack (Postgres, Redis, NATS; optional observability).
+- `docs/adr/` — Architecture Decision Records for the locked Phase 0 choices.
+
+### Local development (Phase 0)
+
+```bash
+# backend — zero external services (SQLite dev-fallback, mock LLM)
+cd backend && uv venv && uv pip install -e ".[dev]"
+uv run pytest                 # run the test suite
+uv run agentos serve          # http://127.0.0.1:8787  (/v1/docs for Swagger)
+
+# desktop — spawn + supervise the backend sidecar end to end (headless)
+cd desktop && npm install && npm run smoke:sidecar
+
+# full Postgres + RLS stack (requires Docker)
+docker compose -f infra/docker-compose.yml up -d
+cd backend && AGENTOS_DATABASE_URL=postgresql+asyncpg://agentos:agentos@localhost:5432/agentos \
+  uv run alembic upgrade head
+```
+
+---
+
+## What Makes AgentOS Different
+
+| Typical agent tooling | AgentOS |
+|---|---|
+| Spend scattered across provider dashboards | One metered balance, one invoice |
+| Report cost after the fact | Real-time credit control — stop before overspend |
+| Credentials sprawl | Scoped, per-tenant, encrypted connectors |
+| Black-box runs | Append-only action log + usage ledger per run |
+| Single-agent demos | A control plane for the whole fleet |
+
+---
+
+## One-Line Summary
+
+> **AgentOS is the control plane for an AI agent workforce — deploy agents, connect them
+> to your tools, and pay for everything they do on one metered, settled balance, with
+> real-time cost control and a full audit trail.**
+
+---
+
+## License
 
 MIT (for now)
-
----
-
-> **If you can explain why your AI made a decision,  
-control when it acts,  
-and prove what happened —  
-then you can deploy it.  
-AgentOS exists for that reason.**

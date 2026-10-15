@@ -1,0 +1,49 @@
+appId: com.agentos.desktop
+productName: AgentOS
+copyright: AgentOS
+
+directories:
+  output: release
+  buildResources: build
+
+# The React/SSR app is shipped exactly as built. We package the Electron entry
+# plus the app's own Nitro node-server output; the main process boots that
+# server locally and loads it, so the UI is identical to the web build.
+files:
+  - electron/**/*
+  - package.json
+  # The runtime only needs the Electron entry + Node builtins; the app itself is
+  # served from the self-contained .output server shipped in extraResources, so
+  # the project's node_modules don't need to go into the asar.
+  - "!node_modules/**/*"
+
+# The built app (.output) is a self-contained node server; ship it unmodified
+# as an extra resource that the main process forks at runtime.
+extraResources:
+  - from: .output
+    to: app/.output
+
+# asar keeps startup fast; .output stays outside asar (in resources) so Node can
+# fork it directly.
+asar: true
+
+linux:
+  target:
+    - AppImage
+  category: Utility
+  artifactName: ${productName}-${version}.${ext}
+
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-Setup.${ext}
+
+mac:
+  target:
+    - dmg
+  category: public.app-category.productivity
+  artifactName: ${productName}-${version}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
