@@ -50,7 +50,7 @@ executes. The run is a managed job — disconnecting does not stop it.
 The Phase 0 spike socket `WS /v1/runs/stream` (anonymous, no agent) remains for the token-stream
 demo.
 
-## Current surface (Phases 0–1)
+## Current surface (Phases 0–2)
 
 - `GET  /health` — liveness + which DB/runtime profile is active (unauthenticated)
 - `GET  /metrics` — Prometheus metrics (unauthenticated)
@@ -60,7 +60,10 @@ demo.
 - `POST /v1/agents/{id}/runs` — trigger a run (returns the completed run in-process)
 - `WS   /v1/agents/{id}/runs/stream` — trigger + stream run events
 - `GET  /v1/runs` · `GET /v1/runs/{id}` — list / inspect runs
-- `GET  /v1/runs/{id}/actions` — the append-only action log for a run
+- `GET  /v1/runs/{id}/actions` — the append-only action log for a run (incl. `connector_call` rows)
 - `POST /v1/runs/{id}/resume` · `POST /v1/runs/{id}/cancel` — lifecycle control
 - `GET  /v1/usage` — list captured usage events (filter by `run_id`)
+- `GET  /v1/connectors` · `GET /v1/connectors/{key}` — discover connectors + their tools/scopes
+- `GET  /v1/credentials` · `POST /v1/credentials` · `DELETE /v1/credentials/{connector_key}` —
+  per-tenant credential vault (secret is **write-only**; never returned)
 - Phase 0 spike: `POST /v1/runs`, `POST /v1/runs/sync`, `WS /v1/runs/stream`

@@ -5,6 +5,7 @@ from app.models.action_log import ActionLog
 from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
 from app.models.api_key import ApiKey
+from app.models.credential import Credential
 from app.models.run import Run
 from app.models.tenant import Tenant
 from app.models.usage_event import UsageEvent
@@ -20,4 +21,5 @@ __all__ = [
     "AgentVersion",
     "Run",
     "ActionLog",
+    "Credential",
 ]

@@ -37,6 +37,16 @@ class ForbiddenError(AppError):
     code = "forbidden"
 
 
+class ScopeDeniedError(ForbiddenError):
+    """A connector call demanded a scope the agent's version was not granted (Phase 2).
+
+    Raised by the ConnectorBroker at call time and recorded in the action log, so an
+    ungranted capability is both denied and attributable.
+    """
+
+    code = "scope_denied"
+
+
 class NotFoundError(AppError):
     status_code = 404
     code = "not_found"

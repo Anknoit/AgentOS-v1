@@ -33,6 +33,7 @@ def build_context(
         tools=list(version.tools or []),
         trace_id=trace_id,
         settings=settings,
+        connector_bindings=dict(version.connector_bindings or {}),
     )
 
 

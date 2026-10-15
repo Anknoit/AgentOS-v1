@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     dev_user_email: str = "dev@agentos.local"
     # Pepper mixed into api-key hashes. Override in prod.
     api_key_pepper: str = "agentos-dev-pepper-change-me"
+    # Master secret for the per-tenant credential vault (ADR-0008). A per-tenant encryption key
+    # is derived from this via HKDF, so tenant secrets are isolated at the cryptographic layer.
+    # MUST be overridden in prod (rotating it makes existing ciphertext undecryptable).
+    secret_key: str = "agentos-dev-secret-change-me-0123456789"
 
     # --- cors (the UI / Electron renderer talk to this) ---
     cors_origins: list[str] = ["*"]

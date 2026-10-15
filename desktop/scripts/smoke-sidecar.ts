@@ -8,7 +8,9 @@
  *   4. Phase 0 — trigger the trivial agent loop and confirm streamed output + a usage_event,
  *   5. Phase 1 — create a Support Desk agent, run it, and confirm a complete action log plus
  *      one model_call and one tool_call usage event, all carrying the client trace id,
- *   6. tear the sidecar down cleanly.
+ *   6. Phase 2 — store Slack + CRM credentials, run a connector-wired Support Desk agent, and
+ *      confirm it reads/writes the CRM and posts to Slack (three metered connector calls),
+ *   7. tear the sidecar down cleanly.
  *
  * Run: `npm run smoke:sidecar` (from desktop/).
  */
@@ -110,18 +112,66 @@ async function main(): Promise<void> {
       usageKinds[1] === "tool_call" &&
       usage.every((u: { trace_id: string }) => u.trace_id === traceId);
 
-    if (spikeOk && agentOk) {
+    // --- Phase 2: a connector-wired Support Desk agent using scoped, tenant-isolated creds ---
+    await postJson("/v1/credentials", {
+      connector_key: "crm",
+      secret: "crm-smoke-key",
+      provider_meta: { instance: "acme" },
+    });
+    await postJson("/v1/credentials", {
+      connector_key: "slack",
+      secret: "xoxb-smoke-token",
+      provider_meta: { workspace: "acme" },
+    });
+    const connectors = await getJson("/v1/connectors");
+    const connectorKeys = connectors.map((c: { key: string }) => c.key);
+
+    const connAgent = await postJson("/v1/agents", {
+      name: "Smoke Connected Desk",
+      template: "support_desk_connected",
+    });
+    const connRun = await postJson(`/v1/agents/${connAgent.id}/runs`, {
+      task: "I need a refund on my order",
+    });
+    const connActions = await getJson(`/v1/runs/${connRun.id}/actions`);
+    const connectorCalls = connActions.filter(
+      (a: { type: string }) => a.type === "connector_call",
+    );
+    const connectorTools = connectorCalls.map((a: { name: string }) => a.name).sort();
+    const connUsage = await getJson(`/v1/usage?run_id=${connRun.id}`);
+    const connectorUsage = connUsage.filter(
+      (u: { event_type: string }) => u.event_type === "connector_call",
+    );
+    console.log(
+      `[smoke] connected run ${connRun.id} status=${connRun.status} ` +
+        `connectorCalls=[${connectorTools.join(", ")}]`,
+    );
+
+    const connectorOk =
+      ["slack", "crm", "http", "mcp"].every((k) => connectorKeys.includes(k)) &&
+      connRun.status === "completed" &&
+      connectorTools.includes("crm.search_contacts") &&
+      connectorTools.includes("crm.create_ticket") &&
+      connectorTools.includes("slack.post_message") &&
+      connectorCalls.every((a: { content: { outcome: string } }) => a.content.outcome === "ok") &&
+      connectorUsage.length === 3 &&
+      connUsage.every((u: { trace_id: string }) => u.trace_id === traceId);
+
+    if (spikeOk && agentOk && connectorOk) {
       console.log(
         `[smoke] PASS — Support Desk run ${run.id}: ${actions.length}-step audit log, ` +
-          `usage [${usageKinds.join(", ")}] all tagged trace_id ${traceId}`,
+          `usage [${usageKinds.join(", ")}] all tagged trace_id ${traceId}; ` +
+          `connected run ${connRun.id}: 3 metered connector calls to Slack + CRM`,
       );
     } else {
       console.error("[smoke] FAIL — unexpected result", {
         spikeOk,
         agentOk,
+        connectorOk,
         run,
         actionTypes,
         usageKinds,
+        connectorTools,
       });
       exitCode = 1;
     }

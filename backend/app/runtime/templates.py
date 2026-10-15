@@ -12,6 +12,7 @@ from __future__ import annotations
 from app.schemas.agent import AgentVersionConfig
 
 SUPPORT_DESK = "support_desk"
+SUPPORT_DESK_CONNECTED = "support_desk_connected"
 
 
 def support_desk_config(model: str = "gpt-4o-mini") -> AgentVersionConfig:
@@ -29,8 +30,29 @@ def support_desk_config(model: str = "gpt-4o-mini") -> AgentVersionConfig:
     )
 
 
+def support_desk_connected_config(model: str = "gpt-4o-mini") -> AgentVersionConfig:
+    """Support Desk wired to real systems (Phase 2 exit criterion).
+
+    Reads from and writes to a CRM (``crm:read`` + ``crm:write``) and posts to Slack
+    (``chat:write``) — the narrowest scopes the workflow needs, and no more. The
+    ``connector_bindings`` are exactly what the runtime grants: the agent cannot touch any
+    connector or scope not listed here. Credentials for ``slack`` and ``crm`` must be stored in the
+    vault for the tenant first.
+    """
+    cfg = support_desk_config(model)
+    return cfg.model_copy(
+        update={
+            "connector_bindings": {
+                "crm": {"scopes": ["crm:read", "crm:write"]},
+                "slack": {"scopes": ["chat:write"], "channel": "#support"},
+            }
+        }
+    )
+
+
 _TEMPLATES = {
     SUPPORT_DESK: support_desk_config,
+    SUPPORT_DESK_CONNECTED: support_desk_connected_config,
 }
 
 

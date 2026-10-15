@@ -21,12 +21,14 @@ from __future__ import annotations
 import asyncio
 import operator
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from app.config.settings import Settings
+from app.connectors.broker import ConnectorBroker, ConnectorGrants
+from app.core.errors import ConflictError, ScopeDeniedError
 from app.core.logging import get_logger
 from app.core.tracing import start_span
 from app.db.session import tenant_session
@@ -72,6 +74,8 @@ class RunContext:
     tools: list[str]
     trace_id: str | None
     settings: Settings
+    # Scoped connector grants from the pinned agent_version (Phase 2). Empty => no connector access.
+    connector_bindings: dict = field(default_factory=dict)
 
 
 class AgentState(TypedDict, total=False):
@@ -222,6 +226,89 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object):
             "seq": seq + 1,
         }
 
+    async def act(state: AgentState) -> AgentState:
+        """Side-effecting connector actions, gated by the agent's scoped grants (Phase 2).
+
+        A no-op when the agent_version binds no connectors (so the plain Support Desk flow is
+        unchanged). When connectors are bound, every call runs through the ``ConnectorBroker``,
+        which enforces scope, loads the tenant credential, meters, and audits. A call the agent is
+        not granted is denied *and logged* by the broker, and the run continues.
+        """
+        bindings = ctx.connector_bindings or {}
+        if not bindings:
+            return {}
+
+        seq = state.get("seq", 4)
+        broker = ConnectorBroker(
+            tenant_id=ctx.tenant_id,
+            run_id=ctx.run_id,
+            trace_id=ctx.trace_id,
+            grants=ConnectorGrants.from_bindings(bindings),
+            settings=ctx.settings,
+        )
+        granted = 0
+
+        async def _do(tool: str, arguments: dict) -> dict | None:
+            nonlocal seq, granted
+            try:
+                call = await broker.call(tool, arguments, seq=seq)
+                granted += 1
+                await sink.emit(
+                    {
+                        "type": "connector_call",
+                        "run_id": ctx.run_id,
+                        "tool": tool,
+                        "connector": call.connector_key,
+                        "seq": seq,
+                        "usage_event_id": call.usage_event_id,
+                        "output": call.output,
+                    }
+                )
+                return call.output
+            except ScopeDeniedError as exc:
+                await sink.emit(
+                    {
+                        "type": "connector_denied",
+                        "run_id": ctx.run_id,
+                        "tool": tool,
+                        "seq": seq,
+                        "message": str(exc),
+                    }
+                )
+                return None
+            except ConflictError as exc:  # e.g. missing credential — surface, don't crash the run
+                await sink.emit(
+                    {
+                        "type": "connector_error",
+                        "run_id": ctx.run_id,
+                        "tool": tool,
+                        "seq": seq,
+                        "message": str(exc),
+                    }
+                )
+                return None
+            finally:
+                seq += 1
+
+        task = state["task"]
+        draft = state.get("draft", "")
+        if "crm" in bindings:
+            found = await _do("crm.search_contacts", {"query": task})
+            contact_id = None
+            if found and found.get("results"):
+                contact_id = found["results"][0].get("id")
+            await _do(
+                "crm.create_ticket",
+                {"subject": task[:120], "body": draft, "contact_id": contact_id},
+            )
+        if "slack" in bindings:
+            channel = bindings.get("slack", {}).get("channel", "#support")
+            await _do(
+                "slack.post_message",
+                {"channel": channel, "text": f"New support request: {task[:140]}"},
+            )
+        return {"seq": seq, "tool_calls": granted}
+
     async def finalize(state: AgentState) -> AgentState:
         retrieved = state.get("retrieved", [])
         grounding = f"\n\nBased on our knowledge base: {retrieved[0]}" if retrieved else ""
@@ -232,11 +319,13 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object):
     graph.add_node("triage", triage)
     graph.add_node("retrieve", retrieve)
     graph.add_node("respond", respond)
+    graph.add_node("act", act)
     graph.add_node("finalize", finalize)
     graph.add_edge(START, "triage")
     graph.add_edge("triage", "retrieve")
     graph.add_edge("retrieve", "respond")
-    graph.add_edge("respond", "finalize")
+    graph.add_edge("respond", "act")
+    graph.add_edge("act", "finalize")
     graph.add_edge("finalize", END)
     return graph.compile(checkpointer=saver)
 
