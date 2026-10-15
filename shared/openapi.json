@@ -1441,6 +1441,64 @@
             }
           }
         }
+      },
+      "patch": {
+        "tags": [
+          "metering"
+        ],
+        "summary": "Set Wallet Enforcement",
+        "description": "Turn prepaid credit control on/off \u2014 a depleted balance then stops work (Phase 4).",
+        "operationId": "set_wallet_enforcement_v1_wallet_patch",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletEnforcementUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/rate-cards": {
@@ -1736,6 +1794,528 @@
                     "$ref": "#/components/schemas/AlertOut"
                   },
                   "title": "Response List Alerts V1 Alerts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/billing/topups": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Create Topup",
+        "description": "Create a Razorpay order for a wallet top-up; the client opens checkout with the result.",
+        "operationId": "create_topup_v1_billing_topups_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopupCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopupOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/billing/topups/{order_id}/confirm": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Confirm Topup",
+        "description": "Verify the checkout callback signature and credit the wallet (idempotent).",
+        "operationId": "confirm_topup_v1_billing_topups__order_id__confirm_post",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Order Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopupConfirm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/billing/payments": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "List Payments",
+        "operationId": "list_payments_v1_billing_payments_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PaymentOut"
+                  },
+                  "title": "Response List Payments V1 Billing Payments Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/billing/payments/{payment_id}/refund": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Refund Payment",
+        "description": "Refund all or part of a settled payment; the wallet is debited through the ledger.",
+        "operationId": "refund_payment_v1_billing_payments__payment_id__refund_post",
+        "parameters": [
+          {
+            "name": "payment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Payment Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/billing/reconciliation": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Get Reconciliation",
+        "description": "Ledger integrity + gateway drift for the tenant (raises an alert if beyond tolerance).",
+        "operationId": "get_reconciliation_v1_billing_reconciliation_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/invoices": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "List Invoices",
+        "operationId": "list_invoices_v1_invoices_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InvoiceOut"
+                  },
+                  "title": "Response List Invoices V1 Invoices Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Generate Invoice",
+        "description": "Roll the period's usage ledger into one statement across the whole fleet.",
+        "operationId": "generate_invoice_v1_invoices_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceGenerate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/invoices/{invoice_id}": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Get Invoice",
+        "operationId": "get_invoice_v1_invoices__invoice_id__get",
+        "parameters": [
+          {
+            "name": "invoice_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invoice Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/webhooks/razorpay": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Razorpay Webhook",
+        "description": "Razorpay webhook \u2014 authenticated by HMAC signature, not by an API key.\n\nThe raw body is verified before anything is parsed or applied, so a forged event never moves\nmoney. Returns 200 with ``handled`` so Razorpay does not retry a correctly-received event.",
+        "operationId": "razorpay_webhook_v1_webhooks_razorpay_post",
+        "parameters": [
+          {
+            "name": "x-razorpay-signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Razorpay-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Razorpay Webhook V1 Webhooks Razorpay Post"
                 }
               }
             }
@@ -2680,6 +3260,289 @@
         ],
         "title": "HealthResponse"
       },
+      "InvoiceGenerate": {
+        "properties": {
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "issued"
+            ],
+            "title": "Status",
+            "default": "issued"
+          }
+        },
+        "type": "object",
+        "title": "InvoiceGenerate"
+      },
+      "InvoiceLine": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count"
+          },
+          "cost_nanos": {
+            "type": "integer",
+            "title": "Cost Nanos"
+          },
+          "price_nanos": {
+            "type": "integer",
+            "title": "Price Nanos"
+          },
+          "cost_usd": {
+            "type": "string",
+            "title": "Cost Usd"
+          },
+          "price_usd": {
+            "type": "string",
+            "title": "Price Usd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "agent_name",
+          "event_type",
+          "event_count",
+          "cost_nanos",
+          "price_nanos",
+          "cost_usd",
+          "price_usd"
+        ],
+        "title": "InvoiceLine"
+      },
+      "InvoiceOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "number": {
+            "type": "string",
+            "title": "Number"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Period Start"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Period End"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Issued At"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count"
+          },
+          "cost_nanos": {
+            "type": "integer",
+            "title": "Cost Nanos"
+          },
+          "price_nanos": {
+            "type": "integer",
+            "title": "Price Nanos"
+          },
+          "margin_nanos": {
+            "type": "integer",
+            "title": "Margin Nanos"
+          },
+          "cost_usd": {
+            "type": "string",
+            "title": "Cost Usd"
+          },
+          "price_usd": {
+            "type": "string",
+            "title": "Price Usd"
+          },
+          "margin_usd": {
+            "type": "string",
+            "title": "Margin Usd"
+          },
+          "total_usd": {
+            "type": "string",
+            "title": "Total Usd"
+          },
+          "line_items": {
+            "items": {
+              "$ref": "#/components/schemas/InvoiceLine"
+            },
+            "type": "array",
+            "title": "Line Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "number",
+          "status",
+          "currency",
+          "period_start",
+          "period_end",
+          "issued_at",
+          "event_count",
+          "cost_nanos",
+          "price_nanos",
+          "margin_nanos",
+          "cost_usd",
+          "price_usd",
+          "margin_usd",
+          "total_usd",
+          "line_items"
+        ],
+        "title": "InvoiceOut"
+      },
+      "PaymentOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "order_id": {
+            "type": "string",
+            "title": "Order Id"
+          },
+          "payment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "amount_nanos": {
+            "type": "integer",
+            "title": "Amount Nanos"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "gateway_amount_minor": {
+            "type": "integer",
+            "title": "Gateway Amount Minor"
+          },
+          "gateway_currency": {
+            "type": "string",
+            "title": "Gateway Currency"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method"
+          },
+          "signature_verified": {
+            "type": "boolean",
+            "title": "Signature Verified"
+          },
+          "refunded_nanos": {
+            "type": "integer",
+            "title": "Refunded Nanos"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "order_id",
+          "payment_id",
+          "status",
+          "amount_nanos",
+          "currency",
+          "gateway_amount_minor",
+          "gateway_currency",
+          "method",
+          "signature_verified",
+          "refunded_nanos",
+          "created_at"
+        ],
+        "title": "PaymentOut"
+      },
       "RateCardOut": {
         "properties": {
           "id": {
@@ -2741,6 +3604,127 @@
           "markup_pct"
         ],
         "title": "RateCardOut"
+      },
+      "ReconciliationOut": {
+        "properties": {
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "topups_nanos": {
+            "type": "integer",
+            "title": "Topups Nanos"
+          },
+          "refunds_nanos": {
+            "type": "integer",
+            "title": "Refunds Nanos"
+          },
+          "usage_cost_nanos": {
+            "type": "integer",
+            "title": "Usage Cost Nanos"
+          },
+          "usage_price_nanos": {
+            "type": "integer",
+            "title": "Usage Price Nanos"
+          },
+          "margin_nanos": {
+            "type": "integer",
+            "title": "Margin Nanos"
+          },
+          "expected_balance_nanos": {
+            "type": "integer",
+            "title": "Expected Balance Nanos"
+          },
+          "wallet_balance_nanos": {
+            "type": "integer",
+            "title": "Wallet Balance Nanos"
+          },
+          "balance_drift_nanos": {
+            "type": "integer",
+            "title": "Balance Drift Nanos"
+          },
+          "gateway_charged_nanos": {
+            "type": "integer",
+            "title": "Gateway Charged Nanos"
+          },
+          "gateway_drift_nanos": {
+            "type": "integer",
+            "title": "Gateway Drift Nanos"
+          },
+          "within_tolerance": {
+            "type": "boolean",
+            "title": "Within Tolerance"
+          },
+          "tolerance_nanos": {
+            "type": "integer",
+            "title": "Tolerance Nanos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "currency",
+          "period_start",
+          "period_end",
+          "topups_nanos",
+          "refunds_nanos",
+          "usage_cost_nanos",
+          "usage_price_nanos",
+          "margin_nanos",
+          "expected_balance_nanos",
+          "wallet_balance_nanos",
+          "balance_drift_nanos",
+          "gateway_charged_nanos",
+          "gateway_drift_nanos",
+          "within_tolerance",
+          "tolerance_nanos"
+        ],
+        "title": "ReconciliationOut",
+        "description": "Does the ledger hang together, and does rated cost match what the gateway moved?"
+      },
+      "RefundCreate": {
+        "properties": {
+          "amount_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Usd"
+          }
+        },
+        "type": "object",
+        "title": "RefundCreate"
       },
       "RunOut": {
         "properties": {
@@ -3046,6 +4030,101 @@
         ],
         "title": "ToolOut"
       },
+      "TopupConfirm": {
+        "properties": {
+          "razorpay_payment_id": {
+            "type": "string",
+            "title": "Razorpay Payment Id"
+          },
+          "razorpay_signature": {
+            "type": "string",
+            "title": "Razorpay Signature"
+          }
+        },
+        "type": "object",
+        "required": [
+          "razorpay_payment_id",
+          "razorpay_signature"
+        ],
+        "title": "TopupConfirm",
+        "description": "The checkout callback the client returns after a successful payment."
+      },
+      "TopupCreate": {
+        "properties": {
+          "amount_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Amount Usd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "amount_usd"
+        ],
+        "title": "TopupCreate"
+      },
+      "TopupOut": {
+        "properties": {
+          "payment_id": {
+            "type": "string",
+            "title": "Payment Id"
+          },
+          "order_id": {
+            "type": "string",
+            "title": "Order Id"
+          },
+          "key_id": {
+            "type": "string",
+            "title": "Key Id"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "title": "Amount Minor"
+          },
+          "gateway_currency": {
+            "type": "string",
+            "title": "Gateway Currency"
+          },
+          "amount_nanos": {
+            "type": "integer",
+            "title": "Amount Nanos"
+          },
+          "amount_usd": {
+            "type": "string",
+            "title": "Amount Usd"
+          },
+          "receipt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "payment_id",
+          "order_id",
+          "key_id",
+          "amount_minor",
+          "gateway_currency",
+          "amount_nanos",
+          "amount_usd"
+        ],
+        "title": "TopupOut",
+        "description": "What the client needs to open Razorpay checkout for the created order."
+      },
       "TriggerRunRequest": {
         "properties": {
           "task": {
@@ -3236,6 +4315,19 @@
         ],
         "title": "ValidationError"
       },
+      "WalletEnforcementUpdate": {
+        "properties": {
+          "enforce_balance": {
+            "type": "boolean",
+            "title": "Enforce Balance"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enforce_balance"
+        ],
+        "title": "WalletEnforcementUpdate"
+      },
       "WalletOut": {
         "properties": {
           "currency": {
@@ -3249,6 +4341,21 @@
           "balance_usd": {
             "type": "string",
             "title": "Balance Usd"
+          },
+          "reserved_nanos": {
+            "type": "integer",
+            "title": "Reserved Nanos",
+            "default": 0
+          },
+          "available_nanos": {
+            "type": "integer",
+            "title": "Available Nanos",
+            "default": 0
+          },
+          "available_usd": {
+            "type": "string",
+            "title": "Available Usd",
+            "default": "$0"
           },
           "enforce_balance": {
             "type": "boolean",

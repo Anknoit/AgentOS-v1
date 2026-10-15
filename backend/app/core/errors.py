@@ -59,6 +59,18 @@ class BudgetExceededError(AppError):
     code = "budget_exceeded"
 
 
+class PaymentError(AppError):
+    """A settlement operation failed — a bad/forged gateway signature or an invalid top-up/refund.
+
+    Raised by the billing layer (Phase 4). Distinct from ``BudgetExceededError`` (spend control):
+    this is about money movement through the gateway, and maps to 400 so a forged webhook or a
+    tampered checkout callback is rejected without crediting a wallet.
+    """
+
+    status_code = 400
+    code = "payment_error"
+
+
 class NotFoundError(AppError):
     status_code = 404
     code = "not_found"

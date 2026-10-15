@@ -50,7 +50,7 @@ executes. The run is a managed job — disconnecting does not stop it.
 The Phase 0 spike socket `WS /v1/runs/stream` (anonymous, no agent) remains for the token-stream
 demo.
 
-## Current surface (Phases 0–3)
+## Current surface (Phases 0–4)
 
 - `GET  /health` — liveness + which DB/runtime profile is active (unauthenticated)
 - `GET  /metrics` — Prometheus metrics (unauthenticated)
@@ -68,12 +68,24 @@ demo.
   per-tenant credential vault (secret is **write-only**; never returned)
 - `GET  /v1/spend` — rated spend for the tenant (filter by `run_id`, `agent_id`, `since`)
 - `GET  /v1/spend/agents` — cost per agent (the fleet spend breakdown)
-- `GET  /v1/wallet` — wallet balance (a cached projection of the ledger)
+- `GET  /v1/wallet` · `PATCH /v1/wallet` — wallet balance (a cached projection of the ledger), with
+  `reserved`/`available`; PATCH toggles prepaid credit control (`enforce_balance`)
 - `GET  /v1/rate-cards` — the tenant's rate cards (active pricing: per-model, per-tool/connector)
 - `GET  /v1/budgets` · `POST /v1/budgets` · `DELETE /v1/budgets/{id}` — spend caps (soft/hard,
   tenant/agent scope); a hard cap stops an agent at the limit. Amounts are integer **nanodollars**
   (1 USD = 1e9) plus a `*_usd` display string; budgets are set in dollars (`limit_usd`).
-- `GET  /v1/alerts` — spend/anomaly alerts (budget breaches, spend spikes, runaway loops)
+- `GET  /v1/alerts` — spend/anomaly alerts (budget breaches, spend spikes, runaway loops,
+  reconciliation drift)
+- `POST /v1/billing/topups` · `POST /v1/billing/topups/{order_id}/confirm` — create a Razorpay
+  top-up order and confirm it with the signed checkout callback (credits the prepaid wallet)
+- `GET  /v1/billing/payments` · `POST /v1/billing/payments/{id}/refund` — list payments; refund
+- `POST /v1/webhooks/razorpay` — Razorpay webhook (unauthenticated; HMAC-signature verified),
+  reconciled into the ledger; idempotent with the checkout confirm
+- `GET  /v1/billing/reconciliation` — ledger integrity + gateway drift (margin leak detection)
+- `GET  /v1/invoices` · `POST /v1/invoices` · `GET /v1/invoices/{id}` — one itemized statement per
+  tenant across the fleet, line items rolled from the ledger (`cost`, `price`, `margin`)
 - Phase 0 spike: `POST /v1/runs`, `POST /v1/runs/sync`, `WS /v1/runs/stream`
 
-A run halted by a hard budget finalizes with status `stopped` (distinct from `completed`/`failed`).
+A run halted by a hard budget **or a depleted prepaid balance** finalizes with status `stopped`
+(distinct from `completed`/`failed`). Money crosses the API as integer **nanodollars** (1 USD = 1e9)
+plus a `*_usd` display string; amounts in are set in dollars (`amount_usd`, `limit_usd`).

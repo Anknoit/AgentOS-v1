@@ -45,6 +45,23 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     llm_model: str = "gpt-4o-mini"
 
+    # --- payments / settlement (Phase 4) ---
+    # "mock" => an in-process gateway that signs with `razorpay_key_secret` so the full
+    # order→verify→webhook path is exercised with no network (like the mock LLM). "razorpay"
+    # => the live Razorpay Orders API. Secrets live only in env; never logged or returned.
+    payment_provider: Literal["mock", "razorpay"] = "mock"
+    razorpay_key_id: str = "rzp_test_dev"
+    razorpay_key_secret: str = "rzp-dev-secret-change-me"
+    razorpay_webhook_secret: str = "rzp-dev-webhook-secret-change-me"
+    # The currency Razorpay charges in and its minor-unit scale (USD→cents=100, INR→paise=100).
+    # The ledger stays in USD nanodollars; `razorpay_fx_usd_to_gateway` converts a USD amount to
+    # the gateway currency so what the gateway charged is recorded exactly for reconciliation.
+    razorpay_currency: str = "USD"
+    razorpay_minor_per_unit: int = 100
+    razorpay_fx_usd_to_gateway: str = "1"
+    # Entering the payment path flips prepaid credit control on after the first successful top-up.
+    enforce_balance_on_topup: bool = True
+
     # --- observability ---
     otel_exporter: Literal["console", "otlp", "none"] = "console"
     otlp_endpoint: str = "http://localhost:4318"

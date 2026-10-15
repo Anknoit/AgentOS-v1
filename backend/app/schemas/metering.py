@@ -50,6 +50,10 @@ class WalletOut(BaseModel):
     currency: str
     balance_nanos: int
     balance_usd: str
+    # Phase 4: funds held against in-flight work, and what's actually spendable.
+    reserved_nanos: int = 0
+    available_nanos: int = 0
+    available_usd: str = "$0"
     enforce_balance: bool
 
 

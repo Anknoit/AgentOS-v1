@@ -18,7 +18,7 @@ The profile is chosen by env (`AGENTOS_DATABASE_URL`, `AGENTOS_REDIS_URL`, `AGEN
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
-uv run pytest                      # 55 tests, all offline
+uv run pytest                      # 68 tests, all offline
 uv run agentos serve               # http://127.0.0.1:8787
 # Swagger UI:        http://127.0.0.1:8787/v1/docs
 # Prometheus:        http://127.0.0.1:8787/metrics
@@ -63,18 +63,20 @@ app/
   core/       context, logging, tracing (OTel), errors, security, crypto, auth, metrics, middleware
   db/         engine, tenant-scoped sessions, base models, Alembic migrations (RLS), seed
   models/     tenant, user, api_key, usage_event, agent, agent_version, run, action_log, credential,
-              rate_card, ledger_entry, wallet, budget, alert
+              rate_card, ledger_entry, wallet, budget, alert, payment, invoice
   schemas/    Pydantic request/response DTOs
-  api/v1/     versioned routers: meta, agents, runs, usage, connectors, spend/wallet/budgets/alerts
+  api/v1/     versioned routers: meta, agents, runs, usage, connectors,
+              spend/wallet/budgets/alerts, billing (topups/payments/reconciliation) + invoices
   runtime/    LangGraph kernel + checkpointer, built-in tools, templates, run manager,
               LLM providers, the Phase 0 agent-loop spike, the Arq queue seam, usage store
   connectors/ MCP-first connector framework: capabilities, specs, MCP client + sessions,
               registry, broker (scope enforcement), built-in Slack/CRM/HTTP + generic MCP
   services/   agent CRUD + versioning, run trigger/resume, connector discovery, credential vault,
-              rate cards, spend aggregation, budgets
+              rate cards, spend aggregation, budgets, wallet enforcement
   metering/   money (nanodollars), rating engine, pipeline (capture→rate→ledger→wallet→anomaly),
-              credit control (budgets), anomaly detection, event-bus seam + idempotent capture
-  billing/    (Phase 4)  ws/ (streaming)
+              credit control (budgets + prepaid reserve/hold), anomaly detection, idempotent capture
+  billing/    (Phase 4) Razorpay gateway (+ mock), top-up lifecycle, wallet credits/reserve,
+              invoicing engine, reconciliation
   main.py     app factory   cli.py   bootstrap.py
 tests/        offline test suite
 ```
@@ -132,11 +134,42 @@ curl -s -H "Authorization: Bearer dev-local-key" http://127.0.0.1:8787/v1/alerts
 A run blocked by a hard cap finalizes with status `stopped` (not `failed`), logs a `budget_hard`
 alert, and leaves its checkpoint intact so it can resume if the cap is raised.
 
-## Invariants honored (Phases 0–3)
+## Settlement & payments (Phase 4)
+
+AgentOS becomes the payer: a tenant tops up a **prepaid wallet** through **Razorpay**, usage debits
+it as agents run (Phase 3 metering), and one itemized **invoice** rolls the ledger (ADR-0010). A
+top-up is confirmed by HMAC-SHA256 signature on both the checkout callback and the webhook, and is
+credited to the wallet **exactly once** (ledger movements are unique on `(tenant_id, ref)`). Money-in
+runs on the dev/test profile against an in-process mock gateway that signs with the dev key secret,
+so the full flow works offline. Set `AGENTOS_PAYMENT_PROVIDER=razorpay` (+ `AGENTOS_RAZORPAY_KEY_ID`
+/ `_KEY_SECRET` / `_WEBHOOK_SECRET`) for the live gateway.
+
+```bash
+# 1. create a $25 top-up order (returns Razorpay order_id + key_id for checkout)
+curl -s -H "Authorization: Bearer dev-local-key" -H "Content-Type: application/json" \
+  -d '{"amount_usd":"25"}' http://127.0.0.1:8787/v1/billing/topups
+# 2. the client opens Razorpay checkout; on success it posts the signed callback back:
+#    POST /v1/billing/topups/{order_id}/confirm {razorpay_payment_id, razorpay_signature}
+#    (the webhook POST /v1/webhooks/razorpay reconciles the same payment — credited once)
+# 3. run a mixed fleet, then roll one invoice across all agents and reconcile the ledger
+curl -s -H "Authorization: Bearer dev-local-key" -X POST \
+  -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8787/v1/invoices
+curl -s -H "Authorization: Bearer dev-local-key" http://127.0.0.1:8787/v1/billing/reconciliation
+# 4. enter the prepaid path — a depleted balance then stops billable work
+curl -s -H "Authorization: Bearer dev-local-key" -X PATCH \
+  -H "Content-Type: application/json" -d '{"enforce_balance":true}' http://127.0.0.1:8787/v1/wallet
+```
+
+With prepaid enforcement on, credit control reserves each action's estimate against **available**
+funds (`balance − reserved`) and the real debit releases the hold, so a concurrent burst can't
+overrun; a depleted balance stops the run `stopped`. Reconciliation re-derives the balance from the
+ledger and flags drift (critical `reconciliation_drift` alert) so margin never silently leaks.
+
+## Invariants honored (Phases 0–4)
 
 - `tenant_id` on every tenant-scoped row; **Postgres RLS** enforces isolation at the data layer
-  (migrations `0001`–`0004` — now also `rate_card`, `ledger_entry`, `wallet`, `budget`, `alert`),
-  mirrored by app-layer scoping on the SQLite fallback.
+  (migrations `0001`–`0005` — now also `rate_card`, `ledger_entry`, `wallet`, `budget`, `alert`,
+  `payment`, `invoice`), mirrored by app-layer scoping on the SQLite fallback.
 - **Config is data, versioned.** `agent_version` is immutable; a run pins the exact version it
   executed, so behaviour is reproducible and a bad change rolls back.
 - **Agents run as managed jobs.** A run executes off the request path (in-process manager or Arq
@@ -155,4 +188,8 @@ alert, and leaves its checkpoint intact so it can resume if the cap is raised.
   `(tenant_id, usage_event_id)`), priced in integer nanodollars against a versioned rate card;
   balances are projections, rating is exactly-once, and a hard budget stops an agent at its cap —
   **checked before each billable action** (ADR-0009).
+- **Settlement is exact and idempotent.** Top-ups/refunds are ledger movements unique on
+  `(tenant_id, ref)`, so the checkout callback and the webhook credit a wallet **exactly once**; a
+  gateway signature is HMAC-verified before any money moves; a prepaid balance reserves against
+  in-flight work and a depleted balance stops billable work; reconciliation surfaces drift (ADR-0010).
 - Observability (structured logs, OTel traces, Prometheus metrics) wired before features.

@@ -12,6 +12,7 @@ from datetime import datetime
 
 from sqlalchemy import func, select
 
+from app.billing.wallet_ops import get_or_create_wallet
 from app.db.session import tenant_session
 from app.metering.money import CURRENCY, format_usd
 from app.models.agent import Agent
@@ -146,11 +147,34 @@ async def get_wallet(tenant_id: str) -> WalletOut:
         ).scalar_one_or_none()
         if wallet is None:
             return WalletOut(
-                currency=CURRENCY, balance_nanos=0, balance_usd=format_usd(0), enforce_balance=False
+                currency=CURRENCY,
+                balance_nanos=0,
+                balance_usd=format_usd(0),
+                reserved_nanos=0,
+                available_nanos=0,
+                available_usd=format_usd(0),
+                enforce_balance=False,
             )
-        return WalletOut(
-            currency=wallet.currency,
-            balance_nanos=wallet.balance_nanos,
-            balance_usd=format_usd(wallet.balance_nanos),
-            enforce_balance=wallet.enforce_balance,
-        )
+        return _wallet_out(wallet)
+
+
+def _wallet_out(wallet: Wallet) -> WalletOut:
+    available = wallet.balance_nanos - wallet.reserved_nanos
+    return WalletOut(
+        currency=wallet.currency,
+        balance_nanos=wallet.balance_nanos,
+        balance_usd=format_usd(wallet.balance_nanos),
+        reserved_nanos=wallet.reserved_nanos,
+        available_nanos=available,
+        available_usd=format_usd(available),
+        enforce_balance=wallet.enforce_balance,
+    )
+
+
+async def set_enforcement(tenant_id: str, enforce: bool) -> WalletOut:
+    """Turn prepaid credit control on/off (entering/leaving the payment path, Phase 4)."""
+    async with tenant_session(tenant_id) as session:
+        wallet = await get_or_create_wallet(session, tenant_id)
+        wallet.enforce_balance = enforce
+        await session.flush()
+        return _wallet_out(wallet)

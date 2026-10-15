@@ -94,15 +94,8 @@ class AgentState(TypedDict, total=False):
     tool_calls: Annotated[int, operator.add]
 
 
-def _build_graph(ctx: RunContext, sink: EventSink, saver: object):
+def _build_graph(ctx: RunContext, sink: EventSink, saver: object, credit: CreditController):
     provider = get_provider(ctx.settings)
-    # One credit controller per run — checks budgets/balance before each billable action.
-    credit = CreditController(
-        tenant_id=ctx.tenant_id,
-        agent_id=ctx.agent_id,
-        run_id=ctx.run_id,
-        trace_id=ctx.trace_id,
-    )
 
     async def triage(state: AgentState) -> AgentState:
         seq = state.get("seq", 1)
@@ -146,6 +139,8 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object):
                             agent_id=ctx.agent_id,
                             trace_id=ctx.trace_id,
                         ),
+                        credit=credit,
+                        seq=seq,
                     )
                     usage_event_id = event.id
         await store.append_action(
@@ -211,6 +206,8 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object):
                         agent_id=ctx.agent_id,
                         trace_id=ctx.trace_id,
                     ),
+                    credit=credit,
+                    seq=seq,
                 )
                 usage_event_id = event.id
         await store.append_action(
@@ -355,11 +352,19 @@ async def execute_run(ctx: RunContext, *, task: str, resume: bool = False) -> As
     result: dict[str, Any] = {}
     error: dict[str, Any] = {}
     halted: dict[str, Any] = {}
+    # One credit controller per run — checks budgets/balance before each billable action and
+    # holds reservations (Phase 4) that any remaining are released when the run ends.
+    credit = CreditController(
+        tenant_id=ctx.tenant_id,
+        agent_id=ctx.agent_id,
+        run_id=ctx.run_id,
+        trace_id=ctx.trace_id,
+    )
 
     async def _drive() -> None:
         try:
             async with checkpointer_cm(ctx.settings) as saver:
-                app = _build_graph(ctx, sink, saver)
+                app = _build_graph(ctx, sink, saver, credit)
                 cfg = {"configurable": {"thread_id": ctx.run_id}}
                 with start_span(
                     "worker.agent_run",
@@ -387,6 +392,8 @@ async def execute_run(ctx: RunContext, *, task: str, resume: bool = False) -> As
             log.error("run.error", run_id=ctx.run_id, error=str(exc))
             error["message"] = str(exc)
         finally:
+            # Release any reservation a step took but never debited (e.g. it errored mid-step).
+            await credit.release_all()
             await sink.close()
 
     await store.set_run_status(ctx.tenant_id, ctx.run_id, "running")

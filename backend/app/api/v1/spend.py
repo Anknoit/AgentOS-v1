@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.core.auth import CurrentTenant
 from app.db.session import tenant_session
 from app.models.alert import Alert
+from app.schemas.billing import WalletEnforcementUpdate
 from app.schemas.metering import (
     AgentSpend,
     AlertOut,
@@ -58,6 +59,14 @@ async def get_spend_by_agent(tenant: CurrentTenant) -> list[AgentSpend]:
 @wallet_router.get("", response_model=WalletOut)
 async def get_wallet(tenant: CurrentTenant) -> WalletOut:
     return await spend_service.get_wallet(tenant.tenant_id)
+
+
+@wallet_router.patch("", response_model=WalletOut)
+async def set_wallet_enforcement(
+    tenant: CurrentTenant, payload: WalletEnforcementUpdate
+) -> WalletOut:
+    """Turn prepaid credit control on/off — a depleted balance then stops work (Phase 4)."""
+    return await spend_service.set_enforcement(tenant.tenant_id, payload.enforce_balance)
 
 
 @ratecards_router.get("", response_model=list[RateCardOut])

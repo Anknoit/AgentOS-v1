@@ -22,5 +22,9 @@ class Wallet(Base, TenantScopedMixin):
 
     currency: Mapped[str] = mapped_column(String(8), default="USD", nullable=False)
     balance_nanos: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    # When true (Phase 4), a billable action is refused if it would drive the balance negative.
+    # Funds held against in-flight work (Phase 4 reserve/hold). Available = balance - reserved;
+    # credit control authorizes against *available* so concurrent actions can't each pass a check
+    # that only one of them fits, then release the hold when the real debit lands.
+    reserved_nanos: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    # When true (Phase 4), a billable action is refused if it would overdraw the available balance.
     enforce_balance: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

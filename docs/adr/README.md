@@ -15,5 +15,6 @@ that supersedes the old one and flip the old one's status to `Superseded by ADR-
 | [ADR-0007](0007-agent-runtime-kernel.md) | Agent runtime kernel: **LangGraph with checkpointing** (checkpoint separate from app DB; exactly-once via deterministic keys) | Accepted |
 | [ADR-0008](0008-connector-framework.md) | Connector framework: **MCP as the primary protocol**, per-tenant encrypted vault, scope enforced by a runtime broker | Accepted |
 | [ADR-0009](0009-metering-rating-budgets.md) | Metering, rating & budgets: **exact integer nanodollars**, versioned rate cards, inline co-transactional rating, append-only ledger, online credit control | Accepted |
+| [ADR-0010](0010-settlement-payments.md) | Settlement & payments: **prepaid wallet, Razorpay gateway** behind a swappable seam, ledger-idempotent top-ups, reserve/hold credit control, invoicing + reconciliation | Accepted |
 
 See [TEMPLATE.md](TEMPLATE.md) for the record format.

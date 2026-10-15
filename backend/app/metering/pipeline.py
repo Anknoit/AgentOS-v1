@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.core.tracing import start_span
 from app.metering.anomaly import check_event
+from app.metering.credit import CreditController
 from app.metering.rating import RateCardData, rate_event
 from app.metering.usage import UsageRecord, capture_usage
 from app.models.ledger_entry import LedgerEntry
@@ -33,16 +34,25 @@ log = get_logger(__name__)
 
 
 async def record_usage(
-    session: AsyncSession, rec: UsageRecord, *, card: RateCardData | None = None
+    session: AsyncSession,
+    rec: UsageRecord,
+    *,
+    card: RateCardData | None = None,
+    credit: CreditController | None = None,
+    seq: int | None = None,
 ) -> UsageEvent:
     """Capture, rate, post to the ledger, update the wallet, and screen for anomalies.
 
     Drop-in replacement for :func:`capture_usage` in the runtime: same signature and return, but
     the event is priced and posted before this returns. Idempotent — a replayed event is returned
-    already rated, with no second ledger write.
+    already rated, with no second ledger write. When a ``credit`` controller reserved funds for this
+    step (Phase 4 prepaid), the hold is released in the same transaction as the debit, so the
+    balance and the reservation move together.
     """
     event = await capture_usage(session, rec)
     if event.rated:
+        if credit is not None:
+            credit.take_hold(seq)  # drop a stale reservation for an already-rated replay
         return event
 
     card = card or await ratecards.get_active_card(rec.tenant_id)
@@ -58,9 +68,10 @@ async def record_usage(
         tool_name=event.model if event.event_type == "tool_call" else None,
     )
 
+    release = credit.take_hold(seq) if credit is not None else 0
     with start_span("metering.rate_and_post", **{"usage.kind": event.event_type}):
         await _post_ledger(session, event, rated, card)
-        await _apply_to_wallet(session, rec.tenant_id, rated.price_nanos)
+        await _apply_to_wallet(session, rec.tenant_id, rated.price_nanos, release_nanos=release)
         event.rated = True
         await session.flush()
         await check_event(
@@ -114,8 +125,14 @@ async def _post_ledger(session: AsyncSession, event: UsageEvent, rated, card) ->
     await session.flush()
 
 
-async def _apply_to_wallet(session: AsyncSession, tenant_id: str, price_nanos: int) -> None:
-    """Debit the wallet projection. Get-or-create the tenant's single wallet."""
+async def _apply_to_wallet(
+    session: AsyncSession, tenant_id: str, price_nanos: int, *, release_nanos: int = 0
+) -> None:
+    """Debit the wallet projection and release any hold this step reserved (Phase 4).
+
+    Get-or-create the tenant's single wallet. Debit and release happen together under the wallet
+    row's lock, so concurrent debits serialize and reservations never outlive their charge.
+    """
     wallet = (
         await session.execute(select(Wallet).where(Wallet.tenant_id == tenant_id))
     ).scalar_one_or_none()
@@ -124,3 +141,5 @@ async def _apply_to_wallet(session: AsyncSession, tenant_id: str, price_nanos: i
         session.add(wallet)
         await session.flush()
     wallet.balance_nanos = wallet.balance_nanos - price_nanos
+    if release_nanos:
+        wallet.reserved_nanos = max(0, wallet.reserved_nanos - release_nanos)

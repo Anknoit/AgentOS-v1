@@ -12,11 +12,15 @@
  *      confirm it reads/writes the CRM and posts to Slack (three metered connector calls),
  *   7. Phase 3 — confirm each billable step is rated into the ledger (spend per run/agent, wallet
  *      projection, active rate card) and that a hard budget stops an agent at its cap,
- *   8. tear the sidecar down cleanly.
+ *   8. Phase 4 — top up the wallet through the (mock) Razorpay gateway with a real HMAC-signed
+ *      checkout confirmation, roll one itemized invoice across the fleet, reconcile the ledger,
+ *      and watch a depleted prepaid balance stop a run,
+ *   9. tear the sidecar down cleanly.
  *
  * Run: `npm run smoke:sidecar` (from desktop/).
  */
 
+import { createHmac } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -198,7 +202,7 @@ async function main(): Promise<void> {
       runSpend.price_nanos > 0 &&
       // BYO default card: price == cost (reconciles with provider numbers).
       runSpend.price_nanos === runSpend.cost_nanos &&
-      // the wallet is the ledger's negative projection (no top-ups in BYO)
+      // the wallet is the ledger's negative projection (no top-ups yet at this point)
       wallet.balance_nanos === -tenantSpend.price_nanos &&
       cards.some((c: { name: string; is_active: boolean }) => c.name === "default" && c.is_active) &&
       agentSpend.some(
@@ -209,12 +213,84 @@ async function main(): Promise<void> {
       cappedRun.status === "stopped" &&
       cappedAlerts.some((a: { kind: string }) => a.kind === "budget_hard");
 
-    if (spikeOk && agentOk && connectorOk && meteringOk) {
+    // --- Phase 4: settlement & payments (Razorpay gateway, mock provider) ---
+    // The mock gateway signs with the dev key secret, so the real HMAC verify path runs offline.
+    const RZP_SECRET = "rzp-dev-secret-change-me";
+    const balanceBeforeTopup = (await getJson("/v1/wallet")).balance_nanos;
+
+    // 1. Create a $25 order and confirm it with a valid checkout signature.
+    const topup = await postJson("/v1/billing/topups", { amount_usd: "25" });
+    const paymentId = `pay_${String(topup.order_id).slice(6)}`;
+    const signature = createHmac("sha256", RZP_SECRET)
+      .update(`${topup.order_id}|${paymentId}`)
+      .digest("hex");
+    const confirmed = await postJson(`/v1/billing/topups/${topup.order_id}/confirm`, {
+      razorpay_payment_id: paymentId,
+      razorpay_signature: signature,
+    });
+    const walletAfterTopup = await getJson("/v1/wallet");
+    console.log(
+      `[smoke] topup ${topup.amount_usd} (order ${topup.order_id}) status=${confirmed.status}; ` +
+        `wallet ${walletAfterTopup.balance_usd}`,
+    );
+
+    // 2. One itemized invoice across the whole fleet, rolled from the ledger.
+    const invoice = await postJson("/v1/invoices", {});
+    // 3. Reconcile: the wallet matches the ledger projection and the gateway charged what we credited.
+    const recon = await getJson("/v1/billing/reconciliation");
+    console.log(
+      `[smoke] invoice ${invoice.number}: ${invoice.event_count} events ${invoice.price_usd}; ` +
+        `recon drift balance=${recon.balance_drift_nanos} gateway=${recon.gateway_drift_nanos}`,
+    );
+
+    // 4. Refund the top-up (back to a slightly negative balance from prior usage), turn on prepaid
+    //    enforcement, and watch the depleted balance stop a run (online credit control).
+    await postJson(`/v1/billing/payments/${confirmed.id}/refund`, { amount_usd: "25" });
+    await fetch(`${cfg.baseUrl}/v1/wallet`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ enforce_balance: true }),
+    });
+    const prepaidAgent = await postJson("/v1/agents", {
+      name: "Smoke Prepaid Desk",
+      template: "support_desk",
+    });
+    const prepaidRun = await postJson(`/v1/agents/${prepaidAgent.id}/runs`, {
+      task: "I need a refund on my order",
+    });
+    const walletFinal = await getJson("/v1/wallet");
+    console.log(
+      `[smoke] prepaid run ${prepaidRun.id} status=${prepaidRun.status}; ` +
+        `wallet ${walletFinal.balance_usd} reserved=${walletFinal.reserved_nanos}`,
+    );
+
+    const settlementOk =
+      confirmed.status === "paid" &&
+      confirmed.signature_verified === true &&
+      // $25 credited (25e9 nanos), charged as 2500 gateway minor units (cents at fx 1)
+      topup.amount_minor === 2500 &&
+      walletAfterTopup.balance_nanos === balanceBeforeTopup + 25_000_000_000 &&
+      invoice.number.startsWith("INV-") &&
+      invoice.event_count >= 1 &&
+      invoice.price_nanos > 0 &&
+      invoice.cost_nanos === invoice.price_nanos && // BYO markup 0
+      invoice.line_items.length >= 1 &&
+      // the wallet is the ledger projection and the gateway reconciles
+      recon.balance_drift_nanos === 0 &&
+      recon.gateway_drift_nanos === 0 &&
+      recon.within_tolerance === true &&
+      // a depleted prepaid balance stopped the run (not failed), with no leaked reservation
+      prepaidRun.status === "stopped" &&
+      walletFinal.reserved_nanos === 0;
+
+    if (spikeOk && agentOk && connectorOk && meteringOk && settlementOk) {
       console.log(
         `[smoke] PASS — Support Desk run ${run.id}: ${actions.length}-step audit log, ` +
           `usage [${usageKinds.join(", ")}] all tagged trace_id ${traceId}; ` +
           `connected run ${connRun.id}: 3 metered connector calls to Slack + CRM; ` +
-          `rated spend ${runSpend.price_usd}, hard cap stopped run ${cappedRun.id}`,
+          `rated spend ${runSpend.price_usd}, hard cap stopped run ${cappedRun.id}; ` +
+          `topped up ${topup.amount_usd}, invoice ${invoice.number}, ` +
+          `prepaid balance stopped run ${prepaidRun.id}`,
       );
     } else {
       console.error("[smoke] FAIL — unexpected result", {
@@ -222,11 +298,13 @@ async function main(): Promise<void> {
         agentOk,
         connectorOk,
         meteringOk,
+        settlementOk,
         run,
         actionTypes,
         usageKinds,
         connectorTools,
         cappedStatus: cappedRun.status,
+        prepaidStatus: prepaidRun.status,
       });
       exitCode = 1;
     }

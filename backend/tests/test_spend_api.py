@@ -36,9 +36,16 @@ def test_tenant_spend_and_wallet_consistent(client, auth_headers):
     wallet = client.get("/v1/wallet", headers=auth_headers).json()
     assert total["scope"] == "tenant"
     assert total["price_nanos"] > 0
-    # wallet balance is the negative of accrued spend (BYO: no top-ups yet)
-    assert wallet["balance_nanos"] == -total["price_nanos"]
-    assert wallet["enforce_balance"] is False
+    # The wallet is the ledger's projection: balance == topups - refunds - usage_price. Expressed
+    # order-independently (other tests may have topped up the shared wallet) via reconciliation,
+    # whose balance drift is zero exactly when the cached balance matches the ledger.
+    recon = client.get("/v1/billing/reconciliation", headers=auth_headers).json()
+    assert recon["balance_drift_nanos"] == 0
+    assert recon["usage_price_nanos"] == total["price_nanos"]
+    assert (
+        wallet["balance_nanos"]
+        == recon["topups_nanos"] - recon["refunds_nanos"] - total["price_nanos"]
+    )
 
 
 def test_rate_cards_endpoint_exposes_default(client, auth_headers):

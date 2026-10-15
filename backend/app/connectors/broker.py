@@ -192,6 +192,8 @@ class ConnectorBroker:
                         agent_id=None,
                         trace_id=self._trace_id,
                     ),
+                    credit=self._credit,
+                    seq=seq,
                 )
                 return event.id
 

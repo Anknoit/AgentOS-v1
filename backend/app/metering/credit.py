@@ -13,7 +13,7 @@ Spend is read from the append-only ledger (the source of truth), scoped to the b
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -44,6 +44,8 @@ class CreditController:
     agent_id: str | None = None
     run_id: str | None = None
     trace_id: str | None = None
+    # seq -> reserved estimate (Phase 4 hold); released when the real debit lands or at run end.
+    holds: dict[int, int] = field(default_factory=dict)
 
     async def authorize(
         self, *, kind: str, estimate_nanos: int = 0, seq: int | None = None
@@ -51,8 +53,11 @@ class CreditController:
         """Permit or refuse the next billable action. Raises ``BudgetExceededError`` on a hard cap.
 
         ``kind`` is the action type (``model_call`` / ``tool_call`` / ``connector_call``) and
-        ``estimate_nanos`` an upper-bound guess of its price, used for the prepaid-balance check.
-        Hard budgets stop at the limit on realized spend, so an agent runs up to its cap then halts.
+        ``estimate_nanos`` an upper-bound guess of its price. Hard budgets stop at the limit on
+        realized spend, so an agent runs up to its cap then halts. When the wallet enforces a
+        prepaid balance (Phase 4), the check is against *available* funds (balance − reserved) and
+        the estimate is **reserved** on success — so a burst of concurrent actions can't each pass a
+        check that only one of them fits; the real debit later releases the hold.
 
         Soft alerts are written in the read transaction (which commits normally); the stop decision
         is made there but the denial is *raised after* the transaction closes, so the
@@ -100,14 +105,19 @@ class CreditController:
                         },
                     )
 
-            # Prepaid balance (Phase 4): refuse if this action would overdraw an enforced wallet.
+            # Prepaid balance (Phase 4): refuse if this action would overdraw an enforced wallet,
+            # otherwise reserve the estimate against available funds (online charging).
             if deny is None:
                 wallet = (
                     await session.execute(select(Wallet).where(Wallet.tenant_id == self.tenant_id))
                 ).scalar_one_or_none()
                 if wallet is not None and wallet.enforce_balance:
-                    if wallet.balance_nanos - estimate_nanos < 0:
+                    available = wallet.balance_nanos - wallet.reserved_nanos
+                    if available - estimate_nanos < 0:
                         deny = {"wallet": wallet}
+                    elif estimate_nanos > 0 and seq is not None:
+                        wallet.reserved_nanos += estimate_nanos
+                        self.holds[seq] = self.holds.get(seq, 0) + estimate_nanos
 
         if deny is None:
             return
@@ -116,6 +126,27 @@ class CreditController:
         raise BudgetExceededError(
             f"insufficient wallet balance ({format_usd(deny['wallet'].balance_nanos)})"
         )
+
+    def take_hold(self, seq: int | None) -> int:
+        """Pop the reservation made for ``seq`` (0 if none) so the real debit can release it."""
+        if seq is None:
+            return 0
+        return self.holds.pop(seq, 0)
+
+    async def release_all(self) -> None:
+        """Release any reservations still outstanding (steps that errored before debiting)."""
+        if not self.holds:
+            return
+        total = sum(self.holds.values())
+        self.holds.clear()
+        if total <= 0:
+            return
+        async with tenant_session(self.tenant_id) as session:
+            wallet = (
+                await session.execute(select(Wallet).where(Wallet.tenant_id == self.tenant_id))
+            ).scalar_one_or_none()
+            if wallet is not None:
+                wallet.reserved_nanos = max(0, wallet.reserved_nanos - total)
 
     async def _deny_hard(self, budget: Budget, spend: int, kind: str) -> None:
         """Log the hard-cap alert in its own committed transaction, then raise."""

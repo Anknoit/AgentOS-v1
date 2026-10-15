@@ -8,7 +8,9 @@ from app.models.alert import Alert
 from app.models.api_key import ApiKey
 from app.models.budget import Budget
 from app.models.credential import Credential
+from app.models.invoice import Invoice
 from app.models.ledger_entry import LedgerEntry
+from app.models.payment import Payment
 from app.models.rate_card import RateCard
 from app.models.run import Run
 from app.models.tenant import Tenant
@@ -32,4 +34,6 @@ __all__ = [
     "Wallet",
     "Budget",
     "Alert",
+    "Payment",
+    "Invoice",
 ]

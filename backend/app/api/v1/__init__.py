@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import agents, connectors, meta, runs, spend, usage
+from app.api.v1 import agents, billing, connectors, meta, runs, spend, usage
 
 api_router = APIRouter()
 api_router.include_router(meta.router, tags=["meta"])
@@ -16,5 +16,8 @@ api_router.include_router(spend.wallet_router, prefix="/wallet", tags=["metering
 api_router.include_router(spend.ratecards_router, prefix="/rate-cards", tags=["metering"])
 api_router.include_router(spend.budgets_router, prefix="/budgets", tags=["metering"])
 api_router.include_router(spend.alerts_router, prefix="/alerts", tags=["metering"])
+api_router.include_router(billing.billing_router, prefix="/billing", tags=["billing"])
+api_router.include_router(billing.invoices_router, prefix="/invoices", tags=["billing"])
+api_router.include_router(billing.webhook_router, prefix="/webhooks", tags=["billing"])
 
 __all__ = ["api_router"]
