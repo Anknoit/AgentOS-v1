@@ -41,12 +41,20 @@ class RunManager:
     def __init__(self) -> None:
         self._channels: dict[str, _Channel] = {}
 
-    def start(self, run_id: str, gen_factory: Callable[[], AsyncIterator[dict]]) -> None:
-        """Begin executing a run in the background.
+    def start(
+        self,
+        run_id: str,
+        gen_factory: Callable[[], AsyncIterator[dict]],
+        *,
+        tenant_id: str | None = None,
+    ) -> None:
+        """Begin executing a run in the background, admitted through the fair scheduler.
 
         Skips if the run is already executing (so concurrent WS subscribers don't double-start),
         but a finished run can be started again — that is how ``resume`` re-enters a paused or
-        failed run from its checkpoint.
+        failed run from its checkpoint. The channel is registered synchronously so a WS subscriber
+        connecting immediately finds it; actual execution waits for a scheduler slot (backpressure
+        + per-tenant fairness, Phase 5), so a tenant's burst queues instead of swamping the box.
         """
         if self.is_active(run_id):
             return
@@ -54,9 +62,15 @@ class RunManager:
         self._channels[run_id] = ch
 
         async def _pump() -> None:
+            ch.task = asyncio.current_task()
             try:
-                async for event in gen_factory():
-                    ch.publish(event)
+                from app.runtime.scheduler import get_scheduler
+
+                async with get_scheduler().slot(tenant_id or run_id):
+                    async for event in gen_factory():
+                        ch.publish(event)
+            except asyncio.CancelledError:  # cooperative cancel (kill); leave the channel closed
+                raise
             except Exception as exc:  # pragma: no cover - kernel already traps its own errors
                 log.error("run.pump_error", run_id=run_id, error=str(exc))
                 ch.publish({"type": "error", "run_id": run_id, "message": str(exc)})

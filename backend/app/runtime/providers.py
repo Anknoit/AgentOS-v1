@@ -90,6 +90,17 @@ class OpenAIProvider:
                 yield StreamChunk(delta=chunk.choices[0].delta.content)
 
 
+def make_provider(name: str, settings: Settings) -> LLMProvider:
+    """Instantiate a provider by name — used by the Phase 5 multi-provider router."""
+    if name == "openai":
+        if not settings.openai_api_key:
+            raise RuntimeError("provider 'openai' requires OPENAI_API_KEY")
+        return OpenAIProvider(settings.openai_api_key)
+    if name == "mock":
+        return MockProvider()
+    raise RuntimeError(f"unknown LLM provider '{name}'")
+
+
 def get_provider(settings: Settings) -> LLMProvider:
     if settings.llm_provider == "openai":
         if not settings.openai_api_key:

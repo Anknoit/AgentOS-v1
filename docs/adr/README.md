@@ -16,5 +16,6 @@ that supersedes the old one and flip the old one's status to `Superseded by ADR-
 | [ADR-0008](0008-connector-framework.md) | Connector framework: **MCP as the primary protocol**, per-tenant encrypted vault, scope enforced by a runtime broker | Accepted |
 | [ADR-0009](0009-metering-rating-budgets.md) | Metering, rating & budgets: **exact integer nanodollars**, versioned rate cards, inline co-transactional rating, append-only ledger, online credit control | Accepted |
 | [ADR-0010](0010-settlement-payments.md) | Settlement & payments: **prepaid wallet, Razorpay gateway** behind a swappable seam, ledger-idempotent top-ups, reserve/hold credit control, invoicing + reconciliation | Accepted |
+| [ADR-0011](0011-scale-reliability.md) | Scale & reliability: **durable transactional-outbox stream + exactly-once replay**, fair per-tenant run scheduling, cost-aware multi-provider routing + failover, tested backup/restore (HA/DR) | Accepted |
 
 See [TEMPLATE.md](TEMPLATE.md) for the record format.

@@ -36,9 +36,35 @@ class Settings(BaseSettings):
     # Empty => agent runs execute in-process; set => enqueue to Arq workers.
     redis_url: str | None = None
 
-    # --- event bus (ADR-0002) ---
-    bus: Literal["inprocess", "nats"] = "inprocess"
+    # --- event bus (ADR-0002; Kafka in Phase 5) ---
+    bus: Literal["inprocess", "nats", "kafka"] = "inprocess"
     nats_url: str = "nats://localhost:4222"
+    kafka_brokers: str = "localhost:9092"
+    # Persist every published event to the durable ``event_log`` (the dev-fallback analogue of a
+    # Kafka topic) so the usage stream can be replayed and audited (Phase 5). On by default so
+    # replay works out of the box; the real Kafka backend provides the durable log in prod.
+    durable_bus: bool = True
+
+    # --- scale & reliability (Phase 5) ---
+    # Fair run scheduling: a global in-flight cap (backpressure) and a per-tenant cap so one noisy
+    # tenant can't starve others. The Arq path additionally partitions the queue per tenant.
+    run_max_concurrency: int = 8
+    run_per_tenant_concurrency: int = 4
+    # Which Arq queue partition this worker serves (e.g. "arq:runs:0"). Unset => Arq's default
+    # queue. Run one worker per partition to spread tenants across workers (see queue.py).
+    worker_queue: str | None = None
+    # Multi-provider routing + failover. When on, the model node routes through ``ModelRouter``,
+    # which picks the cheapest healthy candidate and fails over on provider error. Candidates are
+    # ``provider:model`` pairs; empty => just the configured single provider (back-compat).
+    provider_failover: bool = False
+    provider_candidates: list[str] = []
+    provider_circuit_threshold: int = 3  # consecutive failures before a provider's circuit opens
+    provider_circuit_cooldown_s: float = 30.0  # how long an open circuit stays open
+    # Hot-path rate-card cache (rating reads the active card on every event). 0 disables it.
+    rate_card_cache_ttl_s: float = 30.0
+    # HA/DR: route reads to a replica when set (falls back to the primary when empty). Backups are
+    # taken with the ``agentos backup`` CLI; see docs/runbook-dr.md for RPO/RTO and restore steps.
+    read_replica_url: str | None = None
 
     # --- llm provider (Phase 0 spike) ---
     llm_provider: Literal["mock", "openai"] = "mock"

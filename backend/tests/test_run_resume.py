@@ -11,7 +11,7 @@ from __future__ import annotations
 
 
 def test_run_resumes_after_crash_without_double_counting(client, auth_headers, monkeypatch):
-    from app.runtime import kernel
+    from app.runtime import providers
     from app.runtime.providers import MockProvider
 
     real = MockProvider()
@@ -27,7 +27,9 @@ def test_run_resumes_after_crash_without_double_counting(client, auth_headers, m
             async for chunk in real.stream(prompt, model=model):
                 yield chunk
 
-    monkeypatch.setattr(kernel, "get_provider", lambda _settings: FlakyProvider())
+    # The kernel routes the model node through build_router, which (failover off) wraps the single
+    # provider from get_provider — patch that seam so the first model call crashes mid-run.
+    monkeypatch.setattr(providers, "get_provider", lambda _settings: FlakyProvider())
 
     agent = client.post(
         "/v1/agents",

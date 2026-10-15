@@ -37,7 +37,7 @@ from app.metering.pipeline import record_usage
 from app.metering.usage import UsageRecord
 from app.runtime import store
 from app.runtime.checkpointer import checkpointer_cm
-from app.runtime.providers import get_provider
+from app.runtime.router import build_router
 from app.runtime.tools import get_tool
 
 log = get_logger(__name__)
@@ -95,7 +95,10 @@ class AgentState(TypedDict, total=False):
 
 
 def _build_graph(ctx: RunContext, sink: EventSink, saver: object, credit: CreditController):
-    provider = get_provider(ctx.settings)
+    # One router per run. With failover off this is a thin wrapper over the single provider; with
+    # it on, it picks the cheapest healthy provider and fails over on a request-time error, setting
+    # last_provider/last_model to whoever actually served so the usage event is attributed right.
+    router = build_router(ctx.settings)
 
     async def triage(state: AgentState) -> AgentState:
         seq = state.get("seq", 1)
@@ -179,7 +182,7 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object, credit: Credit
         text_parts: list[str] = []
         input_tokens = output_tokens = 0
         with start_span("provider.chat.stream", **{"llm.model": ctx.model}):
-            async for chunk in provider.stream(prompt, model=ctx.model):
+            async for chunk in router.stream(prompt, model=ctx.model):
                 if chunk.delta:
                     text_parts.append(chunk.delta)
                     await sink.emit(
@@ -189,6 +192,9 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object, credit: Credit
                     input_tokens = chunk.usage.input_tokens
                     output_tokens = chunk.usage.output_tokens
         draft = "".join(text_parts)
+        # Attribute usage to the provider/model that actually served (may differ after failover).
+        served_provider = router.last_provider or ctx.settings.llm_provider
+        served_model = router.last_model or ctx.model
 
         with start_span("metering.record_usage", **{"usage.kind": "model_call"}):
             async with tenant_session(ctx.tenant_id) as session:
@@ -198,8 +204,8 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object, credit: Credit
                         tenant_id=ctx.tenant_id,
                         idempotency_key=f"{ctx.run_id}:step{seq}:model_call",
                         event_type="model_call",
-                        provider=provider.name,
-                        model=ctx.model,
+                        provider=served_provider,
+                        model=served_model,
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         run_id=ctx.run_id,
@@ -215,11 +221,12 @@ def _build_graph(ctx: RunContext, sink: EventSink, saver: object, credit: Credit
             run_id=ctx.run_id,
             seq=seq,
             type="model_call",
-            name=ctx.model,
+            name=served_model,
             content={
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "text": draft,
+                "provider": served_provider,
             },
             usage_event_id=usage_event_id,
             trace_id=ctx.trace_id,

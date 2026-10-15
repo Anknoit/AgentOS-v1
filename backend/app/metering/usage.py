@@ -12,9 +12,11 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config.settings import get_settings
 from app.core.context import get_trace_id
 from app.core.logging import get_logger
 from app.metering.bus import get_bus
+from app.models.event_log import EventLog
 from app.models.usage_event import UsageEvent
 
 log = get_logger(__name__)
@@ -79,6 +81,25 @@ async def capture_usage(session: AsyncSession, rec: UsageRecord) -> UsageEvent:
     session.add(event)
     await session.flush()  # assign id within the caller's transaction
 
+    payload = {
+        "tenant_id": event.tenant_id,
+        "usage_event_id": event.id,
+        "trace_id": event.trace_id,
+    }
+    # Transactional outbox (Phase 5): the durable stream row is written in the *same* transaction
+    # as the usage event, so the replayable log can never disagree with what was captured. A relay
+    # ships outbox rows to Kafka at scale; the in-process bus below is live fan-out only.
+    if get_settings().durable_bus:
+        session.add(
+            EventLog(
+                tenant_id=event.tenant_id,
+                subject=USAGE_SUBJECT,
+                payload=payload,
+                trace_id=event.trace_id,
+            )
+        )
+        await session.flush()
+
     log.info(
         "usage.captured",
         event_id=event.id,
@@ -87,8 +108,5 @@ async def capture_usage(session: AsyncSession, rec: UsageRecord) -> UsageEvent:
         model=event.model,
         total_tokens=event.total_tokens,
     )
-    await get_bus().publish(
-        USAGE_SUBJECT,
-        {"tenant_id": event.tenant_id, "usage_event_id": event.id, "trace_id": event.trace_id},
-    )
+    await get_bus().publish(USAGE_SUBJECT, payload)
     return event

@@ -18,7 +18,7 @@ The profile is chosen by env (`AGENTOS_DATABASE_URL`, `AGENTOS_REDIS_URL`, `AGEN
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
-uv run pytest                      # 68 tests, all offline
+uv run pytest                      # 86 tests, all offline
 uv run agentos serve               # http://127.0.0.1:8787
 # Swagger UI:        http://127.0.0.1:8787/v1/docs
 # Prometheus:        http://127.0.0.1:8787/metrics
@@ -63,20 +63,24 @@ app/
   core/       context, logging, tracing (OTel), errors, security, crypto, auth, metrics, middleware
   db/         engine, tenant-scoped sessions, base models, Alembic migrations (RLS), seed
   models/     tenant, user, api_key, usage_event, agent, agent_version, run, action_log, credential,
-              rate_card, ledger_entry, wallet, budget, alert, payment, invoice
+              rate_card, ledger_entry, wallet, budget, alert, payment, invoice, event_log,
+              consumer_offset
   schemas/    Pydantic request/response DTOs
   api/v1/     versioned routers: meta, agents, runs, usage, connectors,
-              spend/wallet/budgets/alerts, billing (topups/payments/reconciliation) + invoices
-  runtime/    LangGraph kernel + checkpointer, built-in tools, templates, run manager,
-              LLM providers, the Phase 0 agent-loop spike, the Arq queue seam, usage store
+              spend/wallet/budgets/alerts, billing (topups/payments/reconciliation) + invoices, ops
+  runtime/    LangGraph kernel + checkpointer, built-in tools, templates, run manager, LLM providers
+              + the model router (cost-aware failover), the fair scheduler, the Phase 0 agent-loop
+              spike, the Arq queue seam (per-tenant partitions), usage store
   connectors/ MCP-first connector framework: capabilities, specs, MCP client + sessions,
               registry, broker (scope enforcement), built-in Slack/CRM/HTTP + generic MCP
   services/   agent CRUD + versioning, run trigger/resume, connector discovery, credential vault,
-              rate cards, spend aggregation, budgets, wallet enforcement
+              rate cards (+ TTL cache), spend aggregation, budgets, wallet enforcement
   metering/   money (nanodollars), rating engine, pipeline (capture→rate→ledger→wallet→anomaly),
-              credit control (budgets + prepaid reserve/hold), anomaly detection, idempotent capture
+              credit control (budgets + prepaid reserve/hold), anomaly detection, idempotent capture,
+              the durable stream (transactional outbox) + exactly-once replay
   billing/    (Phase 4) Razorpay gateway (+ mock), top-up lifecycle, wallet credits/reserve,
               invoicing engine, reconciliation
+  ops/        (Phase 5) backup/restore (HA/DR), scale tooling
   main.py     app factory   cli.py   bootstrap.py
 tests/        offline test suite
 ```
@@ -165,11 +169,43 @@ funds (`balance − reserved`) and the real debit releases the hold, so a concur
 overrun; a depleted balance stops the run `stopped`. Reconciliation re-derives the balance from the
 ledger and flags drift (critical `reconciliation_drift` alert) so margin never silently leaks.
 
-## Invariants honored (Phases 0–4)
+## Scale & reliability (Phase 5)
+
+Holding accuracy and uptime as volume grows, without touching the accounting core (ADR-0011). Every
+scale dependency is a swappable seam with a hermetic in-process default:
+
+- **Durable, replayable metering stream.** Each captured usage event writes an `event_log` row **in
+  the same transaction** (a transactional outbox), so the stream can't disagree with what was
+  captured. `POST /v1/ops/replay` (or `agentos replay <tenant>`) re-feeds the stream through the
+  idempotent pipeline: a healthy stream posts **zero** new ledger entries (exactly-once), a
+  captured-but-unrated gap is repaired **exactly once** — so a worker kill or an operator replay
+  never loses or double-counts. Kafka plugs in behind the `EventBus` seam (`AGENTOS_BUS=kafka`).
+- **Fair, back-pressured runs.** A `FairScheduler` caps global in-flight runs (backpressure) and each
+  tenant's share (anti-starvation), admitting waiters round-robin; the Arq path partitions the queue
+  per tenant. `GET /v1/ops/scheduler` reports capacity.
+- **Cost-aware multi-provider routing + failover.** With `AGENTOS_PROVIDER_FAILOVER=true`, the model
+  node routes through a `ModelRouter` that picks the cheapest healthy provider and fails over on a
+  request-time error (a circuit breaker deprioritises a flapping provider); usage is attributed to
+  whoever actually served. `GET /v1/ops/providers` reports health.
+- **HA/DR.** `agentos backup` / `agentos restore` (SQLite online-backup + atomic swap; Postgres
+  `pg_dump`/`pg_restore`) with a **tested restore** in CI; a read-replica routing seam
+  (`AGENTOS_READ_REPLICA_URL`) offloads lag-tolerant reads. RPO/RTO in `docs/runbook-dr.md`.
+
+```bash
+# ingestion health + an exactly-once replay (safe any time; repairs gaps, double-counts nothing)
+curl -s -H "Authorization: Bearer dev-local-key" http://127.0.0.1:8787/v1/ops/stream
+curl -s -H "Authorization: Bearer dev-local-key" -X POST \
+  -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8787/v1/ops/replay
+# disaster recovery: snapshot now, restore later, then verify with a replay
+agentos backup --dest /backups/agentos.sqlite
+agentos restore /backups/agentos.sqlite && agentos replay <tenant_id>
+```
+
+## Invariants honored (Phases 0–5)
 
 - `tenant_id` on every tenant-scoped row; **Postgres RLS** enforces isolation at the data layer
-  (migrations `0001`–`0005` — now also `rate_card`, `ledger_entry`, `wallet`, `budget`, `alert`,
-  `payment`, `invoice`), mirrored by app-layer scoping on the SQLite fallback.
+  (migrations `0001`–`0006` — now also `rate_card`, `ledger_entry`, `wallet`, `budget`, `alert`,
+  `payment`, `invoice`, `event_log`, `consumer_offset`), mirrored by app-layer scoping on SQLite.
 - **Config is data, versioned.** `agent_version` is immutable; a run pins the exact version it
   executed, so behaviour is reproducible and a bad change rolls back.
 - **Agents run as managed jobs.** A run executes off the request path (in-process manager or Arq
@@ -192,4 +228,8 @@ ledger and flags drift (critical `reconciliation_drift` alert) so margin never s
   `(tenant_id, ref)`, so the checkout callback and the webhook credit a wallet **exactly once**; a
   gateway signature is HMAC-verified before any money moves; a prepaid balance reserves against
   in-flight work and a depleted balance stops billable work; reconciliation surfaces drift (ADR-0010).
+- **Exactly-once survives failure and scale.** The usage stream is a durable transactional outbox;
+  replay re-derives the ledger with no double count and repairs any gap; per-tenant fair scheduling
+  stops one tenant starving another; provider failover keeps the fleet serving and attributes usage
+  correctly; backup/restore is tested and recovers committed spend (ADR-0011).
 - Observability (structured logs, OTel traces, Prometheus metrics) wired before features.

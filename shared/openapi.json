@@ -2332,6 +2332,223 @@
           }
         }
       }
+    },
+    "/v1/ops/stream": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Stream Health",
+        "description": "Durable metering-stream health: log head, event count, consumer offset, and lag.",
+        "operationId": "stream_health_v1_ops_stream_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamHealthOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ops/replay": {
+      "post": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Replay Stream",
+        "description": "Replay the tenant's usage stream through the idempotent pipeline.\n\nSafe to run any time: already-rated events are no-ops, so a healthy stream yields zero new\nledger entries and zero balance change (``exactly_once=True``); a captured-but-unrated gap is\nrepaired exactly once. This is both the exactly-once proof and the recovery tool.",
+        "operationId": "replay_stream_v1_ops_replay_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ReplayRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplayResultOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ops/scheduler": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Scheduler Stats",
+        "description": "Fair-scheduler capacity and this tenant's running/waiting share (fairness + backpressure).",
+        "operationId": "scheduler_stats_v1_ops_scheduler_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulerStatsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ops/providers": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "Provider Health",
+        "description": "Model-router provider health: candidates and which circuits are open (failover state).",
+        "operationId": "provider_health_v1_ops_providers_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderHealthOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3543,6 +3760,37 @@
         ],
         "title": "PaymentOut"
       },
+      "ProviderHealthOut": {
+        "properties": {
+          "failover_enabled": {
+            "type": "boolean",
+            "title": "Failover Enabled"
+          },
+          "candidates": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "providers": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Providers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "failover_enabled",
+          "candidates",
+          "providers"
+        ],
+        "title": "ProviderHealthOut",
+        "description": "Model-router state: which providers are healthy vs. circuit-open."
+      },
       "RateCardOut": {
         "properties": {
           "id": {
@@ -3725,6 +3973,77 @@
         },
         "type": "object",
         "title": "RefundCreate"
+      },
+      "ReplayRequest": {
+        "properties": {
+          "from_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Offset"
+          },
+          "commit": {
+            "type": "boolean",
+            "title": "Commit",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "ReplayRequest"
+      },
+      "ReplayResultOut": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "from_offset": {
+            "type": "integer",
+            "title": "From Offset"
+          },
+          "to_offset": {
+            "type": "integer",
+            "title": "To Offset"
+          },
+          "replayed": {
+            "type": "integer",
+            "title": "Replayed"
+          },
+          "repaired": {
+            "type": "integer",
+            "title": "Repaired"
+          },
+          "new_ledger_entries": {
+            "type": "integer",
+            "title": "New Ledger Entries"
+          },
+          "balance_delta_nanos": {
+            "type": "integer",
+            "title": "Balance Delta Nanos"
+          },
+          "exactly_once": {
+            "type": "boolean",
+            "title": "Exactly Once"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "from_offset",
+          "to_offset",
+          "replayed",
+          "repaired",
+          "new_ledger_entries",
+          "balance_delta_nanos",
+          "exactly_once"
+        ],
+        "title": "ReplayResultOut",
+        "description": "The outcome of a stream replay \u2014 the exactly-once / recovery proof."
       },
       "RunOut": {
         "properties": {
@@ -3917,6 +4236,40 @@
         "title": "RunResultResponse",
         "description": "Full result of an in-process run (Phase 0 spike + agent sync run)."
       },
+      "SchedulerStatsOut": {
+        "properties": {
+          "max_concurrency": {
+            "type": "integer",
+            "title": "Max Concurrency"
+          },
+          "per_tenant_concurrency": {
+            "type": "integer",
+            "title": "Per Tenant Concurrency"
+          },
+          "running_total": {
+            "type": "integer",
+            "title": "Running Total"
+          },
+          "tenant_running": {
+            "type": "integer",
+            "title": "Tenant Running"
+          },
+          "tenant_waiting": {
+            "type": "integer",
+            "title": "Tenant Waiting"
+          }
+        },
+        "type": "object",
+        "required": [
+          "max_concurrency",
+          "per_tenant_concurrency",
+          "running_total",
+          "tenant_running",
+          "tenant_waiting"
+        ],
+        "title": "SchedulerStatsOut",
+        "description": "Fair-scheduler capacity and this tenant's share of it."
+      },
       "SpendSummary": {
         "properties": {
           "currency": {
@@ -3990,6 +4343,40 @@
           "by_event_type"
         ],
         "title": "SpendSummary"
+      },
+      "StreamHealthOut": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "head_offset": {
+            "type": "integer",
+            "title": "Head Offset"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count"
+          },
+          "committed_offset": {
+            "type": "integer",
+            "title": "Committed Offset"
+          },
+          "lag": {
+            "type": "integer",
+            "title": "Lag"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "head_offset",
+          "event_count",
+          "committed_offset",
+          "lag"
+        ],
+        "title": "StreamHealthOut",
+        "description": "Metering ingestion health for the tenant's durable event stream."
       },
       "ToolOut": {
         "properties": {

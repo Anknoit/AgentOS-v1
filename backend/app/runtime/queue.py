@@ -18,6 +18,7 @@ Phase 0 the worker runs the loop to completion and logs it.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from app.config.settings import Settings, get_settings
@@ -27,6 +28,18 @@ from app.core.tracing import attach_traceparent, inject_traceparent
 from app.runtime.agent import run_agent_loop
 
 log = get_logger(__name__)
+
+# Number of per-tenant queue partitions on the Arq path. A tenant always maps to the same
+# partition (so its runs stay ordered), but tenants are spread across partitions so a flood from
+# one lands on one queue and workers on the others keep serving everyone else — the distributed
+# analogue of the in-process FairScheduler's per-tenant cap (Phase 5, build task 1).
+QUEUE_PARTITIONS = 8
+
+
+def partition_for(tenant_id: str) -> str:
+    """Stable queue name for a tenant: ``arq:runs:<n>``."""
+    h = int(hashlib.sha256(tenant_id.encode()).hexdigest(), 16)
+    return f"arq:runs:{h % QUEUE_PARTITIONS}"
 
 
 def build_run_payload(*, tenant_id: str, task: str, run_id: str, trace_id: str | None) -> dict:
@@ -144,6 +157,7 @@ async def enqueue_agent_run(
                 "trace_id": trace_id,
                 "traceparent": inject_traceparent(),
             },
+            _queue_name=partition_for(tenant_id),  # per-tenant partition (fair scheduling)
         )
         return job.job_id if job else run_id
     finally:
@@ -163,6 +177,8 @@ async def _startup(ctx: dict[str, Any]) -> None:
 class WorkerSettings:
     functions = [execute_run_job, execute_agent_run_job]
     on_startup = _startup
+    # A worker serves one partition when AGENTOS_WORKER_QUEUE is set; else Arq's default queue.
+    queue_name = get_settings().worker_queue or "arq:queue"
 
     @staticmethod
     def redis_settings():

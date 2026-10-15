@@ -55,7 +55,29 @@ async def record_usage(
             credit.take_hold(seq)  # drop a stale reservation for an already-rated replay
         return event
 
-    card = card or await ratecards.get_active_card(rec.tenant_id)
+    release = credit.take_hold(seq) if credit is not None else 0
+    await rate_existing_event(session, event, card=card, release_nanos=release)
+    return event
+
+
+async def rate_existing_event(
+    session: AsyncSession,
+    event: UsageEvent,
+    *,
+    card: RateCardData | None = None,
+    release_nanos: int = 0,
+) -> bool:
+    """Rate, post, and debit for an already-captured event — idempotently.
+
+    Returns ``True`` if it posted a new ledger entry, ``False`` if the event was already rated (a
+    no-op). This is the step shared by :func:`record_usage` (right after capture) and the Phase 5
+    replay tool: replaying a healthy, fully-rated stream calls this for each event and posts
+    nothing (exactly-once), while a captured-but-unrated gap is repaired here exactly once.
+    """
+    if event.rated:
+        return False
+
+    card = card or await ratecards.get_active_card(event.tenant_id)
     rated = rate_event(
         card,
         event_type=event.event_type,
@@ -68,15 +90,16 @@ async def record_usage(
         tool_name=event.model if event.event_type == "tool_call" else None,
     )
 
-    release = credit.take_hold(seq) if credit is not None else 0
     with start_span("metering.rate_and_post", **{"usage.kind": event.event_type}):
         await _post_ledger(session, event, rated, card)
-        await _apply_to_wallet(session, rec.tenant_id, rated.price_nanos, release_nanos=release)
+        await _apply_to_wallet(
+            session, event.tenant_id, rated.price_nanos, release_nanos=release_nanos
+        )
         event.rated = True
         await session.flush()
         await check_event(
             session,
-            tenant_id=rec.tenant_id,
+            tenant_id=event.tenant_id,
             run_id=event.run_id,
             agent_id=event.agent_id,
             price_nanos=rated.price_nanos,
@@ -89,7 +112,7 @@ async def record_usage(
         cost_nanos=rated.cost_nanos,
         price_nanos=rated.price_nanos,
     )
-    return event
+    return True
 
 
 async def _post_ledger(session: AsyncSession, event: UsageEvent, rated, card) -> None:

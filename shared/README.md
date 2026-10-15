@@ -50,7 +50,7 @@ executes. The run is a managed job — disconnecting does not stop it.
 The Phase 0 spike socket `WS /v1/runs/stream` (anonymous, no agent) remains for the token-stream
 demo.
 
-## Current surface (Phases 0–4)
+## Current surface (Phases 0–5)
 
 - `GET  /health` — liveness + which DB/runtime profile is active (unauthenticated)
 - `GET  /metrics` — Prometheus metrics (unauthenticated)
@@ -84,6 +84,11 @@ demo.
 - `GET  /v1/billing/reconciliation` — ledger integrity + gateway drift (margin leak detection)
 - `GET  /v1/invoices` · `POST /v1/invoices` · `GET /v1/invoices/{id}` — one itemized statement per
   tenant across the fleet, line items rolled from the ledger (`cost`, `price`, `margin`)
+- `GET  /v1/ops/stream` — durable metering-stream health (log head, event count, consumer offset, lag)
+- `POST /v1/ops/replay` — replay the tenant's usage stream through the idempotent pipeline; returns
+  the exactly-once result (new ledger entries, balance delta) and repairs any captured-but-unrated gap
+- `GET  /v1/ops/scheduler` — fair-scheduler capacity (global + per-tenant caps) and this tenant's share
+- `GET  /v1/ops/providers` — model-router provider health (candidates, which circuits are open)
 - Phase 0 spike: `POST /v1/runs`, `POST /v1/runs/sync`, `WS /v1/runs/stream`
 
 A run halted by a hard budget **or a depleted prepaid balance** finalizes with status `stopped`

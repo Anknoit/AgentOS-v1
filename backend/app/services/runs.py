@@ -69,7 +69,9 @@ async def trigger_run(
             trace_id=trace_id,
             settings=settings,
         )
-        get_run_manager().start(run_id, lambda: execute_run(ctx, task=task))
+        get_run_manager().start(
+            run_id, lambda: execute_run(ctx, task=task), tenant_id=tenant_id
+        )
         return run_id, False
 
     from app.runtime.queue import enqueue_agent_run
@@ -107,5 +109,7 @@ async def resume_run(
         trace_id=run.trace_id,
         settings=settings,
     )
-    get_run_manager().start(run_id, lambda: execute_run(ctx, task=run.task, resume=True))
+    get_run_manager().start(
+        run_id, lambda: execute_run(ctx, task=run.task, resume=True), tenant_id=tenant_id
+    )
     return run_id

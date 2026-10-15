@@ -15,7 +15,10 @@
  *   8. Phase 4 — top up the wallet through the (mock) Razorpay gateway with a real HMAC-signed
  *      checkout confirmation, roll one itemized invoice across the fleet, reconcile the ledger,
  *      and watch a depleted prepaid balance stop a run,
- *   9. tear the sidecar down cleanly.
+ *   9. Phase 5 — confirm the durable event stream captured the fleet's usage and that replaying it
+ *      through the idempotent pipeline is exactly-once (a re-replay changes nothing), plus the fair
+ *      scheduler and model-router health are exposed,
+ *  10. tear the sidecar down cleanly.
  *
  * Run: `npm run smoke:sidecar` (from desktop/).
  */
@@ -283,14 +286,46 @@ async function main(): Promise<void> {
       prepaidRun.status === "stopped" &&
       walletFinal.reserved_nanos === 0;
 
-    if (spikeOk && agentOk && connectorOk && meteringOk && settlementOk) {
+    // --- Phase 5: scale & reliability (durable stream + exactly-once replay, scheduler, router) ---
+    const streamHealth = await getJson("/v1/ops/stream");
+    // First replay re-feeds the whole stream through the idempotent pipeline; any captured-but-
+    // unrated events (the Phase 0 spike path) are repaired exactly once (new entries == repaired).
+    const replay1 = await postJson("/v1/ops/replay", {});
+    // Second replay must be a perfect no-op — nothing new posted, balance unchanged (exactly-once).
+    const replay2 = await postJson("/v1/ops/replay", { from_offset: 0 });
+    const scheduler = await getJson("/v1/ops/scheduler");
+    const providers = await getJson("/v1/ops/providers");
+    console.log(
+      `[smoke] stream head=${streamHealth.head_offset} events=${streamHealth.event_count}; ` +
+        `replay#1 replayed=${replay1.replayed} repaired=${replay1.repaired} ` +
+        `exactly_once=${replay1.exactly_once}; replay#2 new=${replay2.new_ledger_entries} ` +
+        `Δbalance=${replay2.balance_delta_nanos}; scheduler max=${scheduler.max_concurrency}/` +
+        `tenant=${scheduler.per_tenant_concurrency}; failover=${providers.failover_enabled}`,
+    );
+
+    const scaleOk =
+      streamHealth.head_offset > 0 &&
+      streamHealth.event_count > 0 &&
+      // replay is exactly-once by construction (new ledger entries only ever repair gaps)…
+      replay1.exactly_once === true &&
+      replay1.replayed >= 1 &&
+      // …and a re-replay over the now-healthy stream changes nothing at all
+      replay2.new_ledger_entries === 0 &&
+      replay2.balance_delta_nanos === 0 &&
+      replay2.exactly_once === true &&
+      scheduler.max_concurrency >= 1 &&
+      scheduler.per_tenant_concurrency >= 1 &&
+      typeof providers.failover_enabled === "boolean";
+
+    if (spikeOk && agentOk && connectorOk && meteringOk && settlementOk && scaleOk) {
       console.log(
         `[smoke] PASS — Support Desk run ${run.id}: ${actions.length}-step audit log, ` +
           `usage [${usageKinds.join(", ")}] all tagged trace_id ${traceId}; ` +
           `connected run ${connRun.id}: 3 metered connector calls to Slack + CRM; ` +
           `rated spend ${runSpend.price_usd}, hard cap stopped run ${cappedRun.id}; ` +
           `topped up ${topup.amount_usd}, invoice ${invoice.number}, ` +
-          `prepaid balance stopped run ${prepaidRun.id}`,
+          `prepaid balance stopped run ${prepaidRun.id}; ` +
+          `durable stream ${streamHealth.event_count} events, replay exactly-once`,
       );
     } else {
       console.error("[smoke] FAIL — unexpected result", {
@@ -299,6 +334,7 @@ async function main(): Promise<void> {
         connectorOk,
         meteringOk,
         settlementOk,
+        scaleOk,
         run,
         actionTypes,
         usageKinds,

@@ -8,10 +8,12 @@ has a card to price against.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+from app.config.settings import get_settings
 from app.core.logging import get_logger
 from app.db.session import tenant_session
 from app.metering.rating import RateCardData
@@ -20,6 +22,19 @@ from app.models.rate_card import RateCard
 log = get_logger(__name__)
 
 DEFAULT_CARD_NAME = "default"
+
+# Hot-path cache (Phase 5): rating prices every event and re-reads the active card each time. The
+# active card changes rarely (a new version with a future effective date), so a short TTL cache per
+# tenant removes that read from the metering hot path. Invalidated explicitly on a card write.
+_card_cache: dict[str, tuple[float, RateCardData]] = {}
+
+
+def invalidate_card_cache(tenant_id: str | None = None) -> None:
+    """Drop the cached active card for a tenant (or all tenants). Call on any card write."""
+    if tenant_id is None:
+        _card_cache.clear()
+    else:
+        _card_cache.pop(tenant_id, None)
 
 # Provider list prices, USD per 1M tokens (cost). Kept close to public rate cards so rated spend
 # reconciles against provider invoices within rounding. Extend as models are added.
@@ -64,8 +79,24 @@ def _to_data(row: RateCard) -> RateCardData:
 
 
 async def get_active_card(tenant_id: str) -> RateCardData:
-    """The tenant's active card (latest effective ``effective_at <= now``), or the built-in one."""
+    """The tenant's active card (latest effective ``effective_at <= now``), or the built-in one.
+
+    Served from a short per-tenant TTL cache (Phase 5) so rating doesn't hit the DB per event.
+    """
+    ttl = get_settings().rate_card_cache_ttl_s
+    if ttl > 0:
+        hit = _card_cache.get(tenant_id)
+        if hit is not None and hit[0] > time.monotonic():
+            return hit[1]
+
     now = datetime.now(timezone.utc)
+    card = await _load_active_card(tenant_id, now)
+    if ttl > 0:
+        _card_cache[tenant_id] = (time.monotonic() + ttl, card)
+    return card
+
+
+async def _load_active_card(tenant_id: str, now: datetime) -> RateCardData:
     async with tenant_session(tenant_id) as session:
         row = (
             await session.execute(
@@ -122,4 +153,5 @@ async def ensure_default_card(tenant_id: str) -> None:
                 markup_pct=DEFAULT_MARKUP_PCT,
             )
         )
+    invalidate_card_cache(tenant_id)
     log.info("ratecard.seeded", tenant_id=tenant_id, card=DEFAULT_CARD_NAME)

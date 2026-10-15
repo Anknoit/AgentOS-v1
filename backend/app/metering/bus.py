@@ -1,9 +1,16 @@
-"""Event bus seam (ADR-0002).
+"""Event bus seam (ADR-0002; Kafka in Phase 5).
 
 Metering is event-driven and decoupled from execution: billable actions publish onto a bus and
 rating/ledger writes happen downstream (Phase 3). In Phase 0 the bus is an interface with an
-in-process async implementation so the app boots with no broker. NATS (and later Kafka) plug in
-behind the same ``EventBus`` protocol.
+in-process async implementation so the app boots with no broker. NATS, and in Phase 5 **Kafka**,
+plug in behind the same ``EventBus`` protocol — this ``publish``/``subscribe`` contract is all the
+runtime knows about.
+
+Durability for the metering stream is Phase 5's **transactional outbox**: the durable ``event_log``
+row is written in the *same* transaction as the ``usage_event`` it records (see
+``app.metering.usage.capture_usage``), so the log can never disagree with what was captured, and a
+relay can ship outbox rows to Kafka with no lost/duplicated events. This in-process bus stays the
+live fan-out seam; the durable, replayable record lives in the outbox, not here.
 """
 
 from __future__ import annotations
