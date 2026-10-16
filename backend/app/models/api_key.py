@@ -15,6 +15,10 @@ class ApiKey(Base, TenantScopedMixin):
 
     user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     name: Mapped[str] = mapped_column(String(128), default="default", nullable=False)
+    # RBAC role carried by this key (Phase 6). Lets a tenant mint *scoped* keys — e.g. a read-only
+    # "auditor" key or a CI key limited to runs — without a user/SSO login. Defaults to owner so
+    # existing keys keep full access.
+    role: Mapped[str] = mapped_column(String(32), default="owner", nullable=False)
     prefix: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
     key_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

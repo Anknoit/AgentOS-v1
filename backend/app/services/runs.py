@@ -49,6 +49,10 @@ async def trigger_run(
 ) -> tuple[str, bool]:
     """Create a run and dispatch it. Returns ``(run_id, enqueued)``."""
     settings = settings or get_settings()
+    # Fraud/abuse gate (Phase 6): refuse if the tenant is on hold, apply the run velocity limit.
+    from app.fraud.controls import guard_run
+
+    await guard_run(tenant_id)
     run_id = uuid.uuid4().hex
     await store.create_run(
         tenant_id=tenant_id,

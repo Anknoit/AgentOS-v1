@@ -31,6 +31,8 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=2.0,<3",   # dev-fallback checkpointer (ADR-0007)
     # connector framework (Phase 2) — per-tenant credential encryption (ADR-0008)
     "cryptography>=43,<45",
+    # enterprise identity (Phase 6) — SSO/OIDC JWT verification (ADR-0012)
+    "pyjwt[crypto]>=2.8,<3",
     # llm (Phase 0 agent-loop spike)
     "openai>=1.40,<2",
     "httpx>=0.27,<0.28",

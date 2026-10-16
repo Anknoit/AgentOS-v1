@@ -83,6 +83,56 @@ def _restore(args: argparse.Namespace) -> int:
     return asyncio.run(_run())
 
 
+def _rotate_keys(args: argparse.Namespace) -> int:
+    """Re-encrypt the credential vault under the current master secret (Phase 6, ADR-0008)."""
+    from app.bootstrap import ensure_schema, init_runtime
+    from app.compliance.keyrotation import rotate_all_credentials, rotate_tenant_credentials
+
+    settings = get_settings()
+
+    async def _run() -> int:
+        init_runtime(settings)
+        await ensure_schema(settings)
+        if args.tenant:
+            n = await rotate_tenant_credentials(args.tenant)
+            print(f"rotated {n} credential(s) for tenant {args.tenant}")
+        else:
+            result = await rotate_all_credentials()
+            print(f"rotated credentials: {result} (total {sum(result.values())})")
+        return 0
+
+    return asyncio.run(_run())
+
+
+def _retention(args: argparse.Namespace) -> int:
+    """Purge operational rows past the retention horizon (never the money ledger)."""
+    from app.bootstrap import ensure_schema, init_runtime
+    from app.compliance.retention import purge_all, purge_tenant
+
+    settings = get_settings()
+
+    async def _run() -> int:
+        init_runtime(settings)
+        await ensure_schema(settings)
+        deleted = (
+            await purge_tenant(args.tenant) if args.tenant else await purge_all()
+        )
+        print(f"retention_days={settings.data_retention_days} deleted={deleted}")
+        return 0
+
+    return asyncio.run(_run())
+
+
+def _posture(_args: argparse.Namespace) -> int:
+    """Print the security-posture report (the pre-flight for a security review)."""
+    import json
+
+    from app.compliance.report import security_posture
+
+    print(json.dumps(security_posture(get_settings()), indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agentos", description="AgentOS backend")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -109,6 +159,17 @@ def main(argv: list[str] | None = None) -> int:
     p_restore = sub.add_parser("restore", help="Restore the DB from a snapshot (destructive)")
     p_restore.add_argument("src", help="backup file to restore from")
     p_restore.set_defaults(func=_restore)
+
+    p_rotate = sub.add_parser("rotate-keys", help="Re-encrypt the credential vault (key rotation)")
+    p_rotate.add_argument("--tenant", default=None, help="one tenant id (default: all tenants)")
+    p_rotate.set_defaults(func=_rotate_keys)
+
+    p_ret = sub.add_parser("retention", help="Purge operational rows past the retention horizon")
+    p_ret.add_argument("--tenant", default=None, help="one tenant id (default: all tenants)")
+    p_ret.set_defaults(func=_retention)
+
+    p_posture = sub.add_parser("posture", help="Print the security-posture report (JSON)")
+    p_posture.set_defaults(func=_posture)
 
     args = parser.parse_args(argv)
     return args.func(args)

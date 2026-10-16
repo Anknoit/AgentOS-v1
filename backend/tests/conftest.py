@@ -49,3 +49,12 @@ def client(settings):
 @pytest.fixture()
 def auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {API_KEY}"}
+
+
+@pytest.fixture(autouse=True)
+def _reset_fraud_counters():
+    """Isolate the in-process fraud velocity windows per test (they're module-global)."""
+    from app.fraud.controls import _reset_counters
+
+    _reset_counters()
+    yield

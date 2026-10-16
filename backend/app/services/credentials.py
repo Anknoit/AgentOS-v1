@@ -47,7 +47,9 @@ async def put_credential(
         raise NotFoundError(f"unknown connector '{connector_key}'")
 
     settings = get_settings()
-    ciphertext = encrypt_for_tenant(settings.secret_key, tenant_id, secret)
+    ciphertext = encrypt_for_tenant(
+        settings.secret_key, tenant_id, secret, fallbacks=settings.secret_key_fallbacks
+    )
 
     async with tenant_session(tenant_id) as session:
         existing = (
@@ -134,7 +136,10 @@ async def resolve_credential(
         if cred.expires_at is not None and cred.expires_at < datetime.now(timezone.utc):
             raise ConflictError(f"credential for '{connector_key}' has expired")
         settings = get_settings()
-        secret = decrypt_for_tenant(settings.secret_key, tenant_id, cred.ciphertext)
+        secret = decrypt_for_tenant(
+            settings.secret_key, tenant_id, cred.ciphertext,
+            fallbacks=settings.secret_key_fallbacks,
+        )
         return ResolvedCredential(
             connector_key=connector_key,
             auth_type=cred.auth_type,

@@ -18,7 +18,10 @@
  *   9. Phase 5 — confirm the durable event stream captured the fleet's usage and that replaying it
  *      through the idempotent pipeline is exactly-once (a re-replay changes nothing), plus the fair
  *      scheduler and model-router health are exposed,
- *  10. tear the sidecar down cleanly.
+ *  10. Phase 6 — log in via a (mock) SSO token, confirm a scoped auditor role is read-only (RBAC),
+ *      that control-plane mutations are on the exportable audit trail, that a fraud hold blocks a
+ *      run, and that an agent can be published to and installed from the marketplace,
+ *  11. tear the sidecar down cleanly.
  *
  * Run: `npm run smoke:sidecar` (from desktop/).
  */
@@ -44,6 +47,8 @@ async function main(): Promise<void> {
       AGENTOS_OTEL_EXPORTER: "none",
       AGENTOS_LOG_LEVEL: "WARNING",
       AGENTOS_DATABASE_URL: `sqlite+aiosqlite:///${dbPath}`,
+      // Phase 6: exercise the offline SSO path (mock IdP) end to end in the smoke run.
+      AGENTOS_SSO_MODE: "mock",
     },
   });
   sidecar.on("log", (m: string) => console.log(`[sidecar] ${m}`));
@@ -317,7 +322,89 @@ async function main(): Promise<void> {
       scheduler.per_tenant_concurrency >= 1 &&
       typeof providers.failover_enabled === "boolean";
 
-    if (spikeOk && agentOk && connectorOk && meteringOk && settlementOk && scaleOk) {
+    // --- Phase 6: enterprise & hardening (SSO, RBAC, audit, fraud hold, marketplace, posture) ---
+    // SSO: mint a mock IdP token for a member and prove it resolves to the tenant over the API.
+    const member = await postJson("/v1/members", {
+      email: `analyst-${Date.now()}@acme.co`,
+      role: "auditor",
+    });
+    const sso = await postJson("/v1/auth/sso/token", {
+      subject: member.id,
+      email: member.email,
+      role: "auditor",
+    });
+    const ssoWho = await (
+      await fetch(`${cfg.baseUrl}/v1/whoami`, {
+        headers: { Authorization: `Bearer ${sso.token}` },
+      })
+    ).json();
+
+    // RBAC: a scoped (auditor) API key can read but not write.
+    const auditorKey = await postJson("/v1/api-keys", { name: "smoke-auditor", role: "auditor" });
+    const auditorHeaders = { Authorization: `Bearer ${auditorKey.key}` };
+    const auditorRead = await fetch(`${cfg.baseUrl}/v1/agents`, { headers: auditorHeaders });
+    const auditorWrite = await fetch(`${cfg.baseUrl}/v1/agents`, {
+      method: "POST",
+      headers: { ...auditorHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "should-be-denied" }),
+    });
+
+    // Audit: the control-plane mutations above are on the exportable trail.
+    const auditTrail = await getJson("/v1/audit");
+    const auditActions = new Set(auditTrail.map((r: { action: string }) => r.action));
+
+    // Compliance: the security-posture report (the review artifact).
+    const posture = await getJson("/v1/compliance/report");
+
+    // Fraud: a manual hold blocks a new run; releasing it unblocks (anomaly-driven analogue).
+    const hold = await postJson("/v1/admin/holds", { reason: "smoke review" });
+    const heldRun = await fetch(`${cfg.baseUrl}/v1/agents/${agent.id}/runs`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ task: "blocked while held" }),
+    });
+    await postJson(`/v1/admin/holds/${hold.id}/release`, {});
+
+    // Marketplace: publish the Support Desk agent and install it as a fresh agent in-tenant.
+    const listing = await postJson("/v1/marketplace/publish/agent", {
+      agent_id: agent.id,
+      name: "Smoke Support Desk",
+    });
+    const catalogue = await getJson("/v1/marketplace");
+    const installed = await postJson(`/v1/marketplace/${listing.id}/install`, {});
+
+    console.log(
+      `[smoke] sso role=${ssoWho.role}/${ssoWho.auth_method}; ` +
+        `rbac read=${auditorRead.status} write=${auditorWrite.status}; ` +
+        `audit actions=${auditActions.size}; posture review_ready=${posture.review_ready} ` +
+        `isolation="${posture.tenant_isolation}"; hold blocked run=${heldRun.status}; ` +
+        `marketplace listing=${listing.slug} installs=${catalogue.length} ` +
+        `installed_agent=${installed.agent_id ? "yes" : "no"}`,
+    );
+
+    const enterpriseOk =
+      ssoWho.auth_method === "sso" &&
+      ssoWho.role === "auditor" &&
+      auditorRead.status === 200 &&
+      auditorWrite.status === 403 &&
+      auditActions.has("agent.create") &&
+      auditActions.has("member.create") &&
+      typeof posture.review_ready === "boolean" &&
+      posture.encryption.credentials_at_rest === "per-tenant-fernet-hkdf" &&
+      heldRun.status === 403 &&
+      listing.id.length > 0 &&
+      installed.kind === "agent_template" &&
+      Boolean(installed.agent_id);
+
+    if (
+      spikeOk &&
+      agentOk &&
+      connectorOk &&
+      meteringOk &&
+      settlementOk &&
+      scaleOk &&
+      enterpriseOk
+    ) {
       console.log(
         `[smoke] PASS — Support Desk run ${run.id}: ${actions.length}-step audit log, ` +
           `usage [${usageKinds.join(", ")}] all tagged trace_id ${traceId}; ` +
@@ -325,7 +412,9 @@ async function main(): Promise<void> {
           `rated spend ${runSpend.price_usd}, hard cap stopped run ${cappedRun.id}; ` +
           `topped up ${topup.amount_usd}, invoice ${invoice.number}, ` +
           `prepaid balance stopped run ${prepaidRun.id}; ` +
-          `durable stream ${streamHealth.event_count} events, replay exactly-once`,
+          `durable stream ${streamHealth.event_count} events, replay exactly-once; ` +
+          `SSO login as ${ssoWho.role}, RBAC denied an auditor write, ` +
+          `hold blocked a run, marketplace install ${installed.slug}`,
       );
     } else {
       console.error("[smoke] FAIL — unexpected result", {
@@ -335,6 +424,7 @@ async function main(): Promise<void> {
         meteringOk,
         settlementOk,
         scaleOk,
+        enterpriseOk,
         run,
         actionTypes,
         usageKinds,

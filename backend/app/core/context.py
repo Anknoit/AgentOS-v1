@@ -19,10 +19,17 @@ _user_id: ContextVar[str | None] = ContextVar("user_id", default=None)
 
 @dataclass(frozen=True)
 class TenantContext:
-    """The authenticated principal for the current unit of work."""
+    """The authenticated principal for the current unit of work.
+
+    ``role`` drives RBAC (Phase 6): it is the role of the user/key that authenticated, and the
+    ``Scoped`` dependency checks it against the permission a write endpoint demands.
+    ``auth_method`` records how the principal proved itself (``api_key`` / ``sso``) for the audit.
+    """
 
     tenant_id: str
     user_id: str | None = None
+    role: str = "owner"
+    auth_method: str = "api_key"
 
 
 def new_trace_id() -> str:

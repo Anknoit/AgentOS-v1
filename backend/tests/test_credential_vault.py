@@ -48,7 +48,11 @@ async def test_put_credential_encrypts_at_rest_and_resolves(client):
     # stored ciphertext must not contain the plaintext secret
     async with tenant_session(tid) as s:
         row = (
-            await s.execute(select(Credential).where(Credential.connector_key == "slack"))
+            await s.execute(
+                select(Credential).where(
+                    Credential.tenant_id == tid, Credential.connector_key == "slack"
+                )
+            )
         ).scalar_one()
     assert "xoxb-the-real-token" not in row.ciphertext
 

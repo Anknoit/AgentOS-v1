@@ -51,6 +51,10 @@ def _gateway_minor_to_nanos(minor: int) -> int:
 
 async def create_topup(tenant_id: str, amount_usd: Decimal) -> TopupOut:
     """Create a gateway order for a top-up and persist a ``created`` payment to confirm later."""
+    # Prepaid-abuse protection (Phase 6): refuse if held, apply the top-up velocity limit.
+    from app.fraud.controls import guard_topup
+
+    await guard_topup(tenant_id)
     settings = get_settings()
     gateway = get_gateway(settings)
     amount_nanos = usd_to_nanos(amount_usd)

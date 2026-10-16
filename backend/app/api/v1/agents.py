@@ -11,14 +11,18 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from app.core.auth import CurrentTenant, resolve_api_key
-from app.core.context import get_trace_id, set_tenant, set_trace_id
+from app.compliance.audit import audit
+from app.core.auth import CurrentTenant, resolve_bearer
+from app.core.context import TenantContext, get_trace_id, set_tenant, set_trace_id
 from app.core.errors import AuthError, NotFoundError
 from app.core.logging import get_logger
 from app.core.metrics import RUNS_STARTED
+from app.identity.rbac import Scoped
 from app.runtime.manager import get_run_manager
 from app.runtime.store import get_run
 from app.schemas.agent import AgentCreate, AgentOut, AgentUpdate, AgentVersionOut
@@ -31,8 +35,14 @@ router = APIRouter()
 
 
 @router.post("", response_model=AgentOut, status_code=201)
-async def create_agent(body: AgentCreate, tenant: CurrentTenant) -> AgentOut:
+async def create_agent(
+    body: AgentCreate, tenant: Annotated[TenantContext, Scoped("agents:write")]
+) -> AgentOut:
     agent = await agents_service.create_agent(tenant.tenant_id, body)
+    await audit(
+        tenant, "agent.create", resource_type="agent", resource_id=agent.id,
+        context={"name": agent.name, "template": agent.template},
+    )
     return AgentOut.model_validate(agent)
 
 
@@ -49,8 +59,14 @@ async def get_agent(agent_id: str, tenant: CurrentTenant) -> AgentOut:
 
 
 @router.patch("/{agent_id}", response_model=AgentOut)
-async def update_agent(agent_id: str, body: AgentUpdate, tenant: CurrentTenant) -> AgentOut:
+async def update_agent(
+    agent_id: str, body: AgentUpdate, tenant: Annotated[TenantContext, Scoped("agents:write")]
+) -> AgentOut:
     agent = await agents_service.update_agent(tenant.tenant_id, agent_id, body)
+    await audit(
+        tenant, "agent.update", resource_type="agent", resource_id=agent_id,
+        context={"new_version": body.config is not None},
+    )
     return AgentOut.model_validate(agent)
 
 
@@ -62,7 +78,7 @@ async def list_versions(agent_id: str, tenant: CurrentTenant) -> list[AgentVersi
 
 @router.post("/{agent_id}/runs", response_model=RunOut, status_code=201)
 async def trigger_agent_run(
-    agent_id: str, body: TriggerRunRequest, tenant: CurrentTenant
+    agent_id: str, body: TriggerRunRequest, tenant: Annotated[TenantContext, Scoped("runs:write")]
 ) -> RunOut:
     """Trigger a run. In-process, waits for completion and returns the finished run."""
     agent = await agents_service.get_agent(tenant.tenant_id, agent_id)
@@ -97,7 +113,7 @@ async def stream_agent_run(ws: WebSocket, agent_id: str) -> None:
         await ws.close(code=4401)
         return
     try:
-        ctx = await resolve_api_key(token)
+        ctx = await resolve_bearer(token)
     except AuthError:
         await ws.close(code=4401)
         return

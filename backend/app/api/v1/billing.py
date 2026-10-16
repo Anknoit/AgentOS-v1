@@ -13,8 +13,11 @@ from typing import Annotated
 from fastapi import APIRouter, Header, Request
 
 from app.billing import invoicing, payments, reconciliation
+from app.compliance.audit import audit
 from app.core.auth import CurrentTenant
+from app.core.context import TenantContext
 from app.core.logging import get_logger
+from app.identity.rbac import Scoped
 from app.metering.money import usd_to_nanos
 from app.schemas.billing import (
     InvoiceGenerate,
@@ -35,22 +38,36 @@ webhook_router = APIRouter()
 
 
 @billing_router.post("/topups", response_model=TopupOut, status_code=201)
-async def create_topup(tenant: CurrentTenant, payload: TopupCreate) -> TopupOut:
+async def create_topup(
+    tenant: Annotated[TenantContext, Scoped("billing:write")], payload: TopupCreate
+) -> TopupOut:
     """Create a Razorpay order for a wallet top-up; the client opens checkout with the result."""
-    return await payments.create_topup(tenant.tenant_id, payload.amount_usd)
+    out = await payments.create_topup(tenant.tenant_id, payload.amount_usd)
+    await audit(
+        tenant, "topup.create", resource_type="order", resource_id=out.order_id,
+        context={"amount_usd": str(payload.amount_usd)},
+    )
+    return out
 
 
 @billing_router.post("/topups/{order_id}/confirm", response_model=PaymentOut)
 async def confirm_topup(
-    tenant: CurrentTenant, order_id: str, payload: TopupConfirm
+    tenant: Annotated[TenantContext, Scoped("billing:write")],
+    order_id: str,
+    payload: TopupConfirm,
 ) -> PaymentOut:
     """Verify the checkout callback signature and credit the wallet (idempotent)."""
-    return await payments.confirm_topup(
+    out = await payments.confirm_topup(
         tenant.tenant_id,
         order_id,
         razorpay_payment_id=payload.razorpay_payment_id,
         razorpay_signature=payload.razorpay_signature,
     )
+    await audit(
+        tenant, "topup.confirm", resource_type="payment", resource_id=out.id,
+        context={"order_id": order_id, "status": out.status},
+    )
+    return out
 
 
 @billing_router.get("/payments", response_model=list[PaymentOut])
@@ -60,11 +77,18 @@ async def list_payments(tenant: CurrentTenant) -> list[PaymentOut]:
 
 @billing_router.post("/payments/{payment_id}/refund", response_model=PaymentOut)
 async def refund_payment(
-    tenant: CurrentTenant, payment_id: str, payload: RefundCreate
+    tenant: Annotated[TenantContext, Scoped("billing:write")],
+    payment_id: str,
+    payload: RefundCreate,
 ) -> PaymentOut:
     """Refund all or part of a settled payment; the wallet is debited through the ledger."""
     amount = usd_to_nanos(payload.amount_usd) if payload.amount_usd is not None else None
-    return await payments.refund_payment(tenant.tenant_id, payment_id, amount)
+    out = await payments.refund_payment(tenant.tenant_id, payment_id, amount)
+    await audit(
+        tenant, "payment.refund", resource_type="payment", resource_id=payment_id,
+        context={"amount_usd": str(payload.amount_usd) if payload.amount_usd else "full"},
+    )
+    return out
 
 
 @billing_router.get("/reconciliation", response_model=ReconciliationOut)

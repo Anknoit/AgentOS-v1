@@ -107,6 +107,61 @@ class Settings(BaseSettings):
     # MUST be overridden in prod (rotating it makes existing ciphertext undecryptable).
     secret_key: str = "agentos-dev-secret-change-me-0123456789"
 
+    # --- enterprise & hardening (Phase 6) ---
+    # Deployment shape. "cloud" = multi-tenant SaaS; "self_hosted" = a supported single-tenant
+    # install on the customer's own server. When ``single_tenant_id`` is set, the instance refuses
+    # any principal that resolves to a different tenant (hard isolation for on-prem — ADR-0012).
+    deployment_mode: Literal["cloud", "self_hosted"] = "cloud"
+    single_tenant_id: str | None = None
+    # Data residency: a label pinned on every tenant at creation and surfaced in /health and the
+    # compliance report. A tenant's region is immutable once set (residency guarantee).
+    data_region: str = "global"
+
+    # RBAC. When on, write endpoints require the principal's role to grant the matching permission
+    # (identity/rbac.py). The owner role grants everything, so existing owner keys are unaffected.
+    rbac_enabled: bool = True
+
+    # SSO / enterprise identity (graduates the Phase 0 API-key skeleton — ADR-0004 → ADR-0012).
+    #   "none"  — API keys only (default, fully hermetic).
+    #   "mock"  — accept HS256 JWTs signed with ``sso_secret`` (offline SSO demo; no IdP needed).
+    #   "oidc"  — verify RS256 JWTs against a real issuer's JWKS (Clerk/Auth0/Okta/Entra).
+    # A bearer token that parses as a JWT is routed to the SSO verifier; anything else is an API
+    # key, so both paths coexist during a migration.
+    sso_mode: Literal["none", "mock", "oidc"] = "none"
+    sso_secret: str = "agentos-dev-sso-secret-change-me"
+    oidc_issuer: str | None = None
+    oidc_audience: str | None = None
+    oidc_jwks_url: str | None = None
+
+    # Compliance. Audit logging records every control-plane mutation (who did what) to a tenant-
+    # scoped, append-only table exportable for a security review. Retention purges operational rows
+    # (runs, action log, event log, audit) older than N days; 0 = retain forever. The money ledger
+    # (ledger_entry/invoice/payment) is **never** purged — it is immutable financial record.
+    audit_log_enabled: bool = True
+    data_retention_days: int = 0
+    # Key rotation (ADR-0008): previous master secrets, newest-first. Ciphertext written under an
+    # old secret still decrypts (MultiFernet), so ``agentos rotate-keys`` re-encrypts the vault
+    # under the current ``secret_key`` with zero downtime, then the old secret is dropped.
+    secret_key_fallbacks: list[str] = []
+
+    # Fraud & abuse controls. Velocity limits cap how fast a tenant can start runs / top up; a
+    # breach (or an anomaly like a runaway loop) places a hold that blocks further billable work
+    # until an operator releases it. In-process counters are the hermetic default; a shared store
+    # (Redis) is the scale seam.
+    fraud_enabled: bool = True
+    fraud_run_velocity_limit: int = 100
+    fraud_run_velocity_window_s: float = 60.0
+    fraud_topup_velocity_limit: int = 10
+    fraud_topup_velocity_window_s: float = 3600.0
+    # Place an automatic hold when a tenant trips a runaway-loop/critical anomaly in the window.
+    fraud_hold_on_anomaly: bool = True
+    fraud_anomaly_window_s: float = 3600.0
+
+    # Marketplace: publish/install agent templates and connector configs across tenants. Listings
+    # are a deliberately **cross-tenant public catalogue** (the one table outside RLS); secrets are
+    # never published — an installer brings their own credentials.
+    marketplace_enabled: bool = True
+
     # --- cors (the UI / Electron renderer talk to this) ---
     cors_origins: list[str] = ["*"]
 
@@ -117,6 +172,20 @@ class Settings(BaseSettings):
     @property
     def use_inprocess_runtime(self) -> bool:
         return self.redis_url is None
+
+    @property
+    def dev_secrets_in_use(self) -> bool:
+        """True if any security-critical secret is still a shipped default (a review red flag)."""
+        return any(
+            "change-me" in s
+            for s in (
+                self.secret_key,
+                self.api_key_pepper,
+                self.sso_secret,
+                self.razorpay_key_secret,
+                self.razorpay_webhook_secret,
+            )
+        )
 
 
 @lru_cache

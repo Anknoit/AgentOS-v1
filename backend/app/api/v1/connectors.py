@@ -12,9 +12,14 @@ tenant-scoped and the secret is never returned.
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Query, Response
 
+from app.compliance.audit import audit
 from app.core.auth import CurrentTenant
+from app.core.context import TenantContext
+from app.identity.rbac import Scoped
 from app.schemas.connector import ConnectorOut, CredentialCreate, CredentialOut
 from app.services import connectors as connectors_service
 from app.services import credentials as vault
@@ -42,7 +47,9 @@ async def list_credentials(tenant: CurrentTenant) -> list[CredentialOut]:
 
 
 @credentials_router.post("", response_model=CredentialOut, status_code=201)
-async def put_credential(body: CredentialCreate, tenant: CurrentTenant) -> CredentialOut:
+async def put_credential(
+    body: CredentialCreate, tenant: Annotated[TenantContext, Scoped("connectors:write")]
+) -> CredentialOut:
     cred = await vault.put_credential(
         tenant.tenant_id,
         connector_key=body.connector_key,
@@ -52,14 +59,23 @@ async def put_credential(body: CredentialCreate, tenant: CurrentTenant) -> Crede
         scopes=body.scopes,
         expires_at=body.expires_at,
     )
+    # The secret is never audited — only the fact a credential was stored (threat T08/SOC 2).
+    await audit(
+        tenant, "credential.store", resource_type="credential", resource_id=cred.id,
+        context={"connector_key": body.connector_key, "name": body.name},
+    )
     return CredentialOut.model_validate(cred)
 
 
 @credentials_router.delete("/{connector_key}", status_code=204, response_class=Response)
 async def delete_credential(
     connector_key: str,
-    tenant: CurrentTenant,
+    tenant: Annotated[TenantContext, Scoped("connectors:write")],
     name: str = Query(default="default"),
 ) -> Response:
     await vault.delete_credential(tenant.tenant_id, connector_key, name)
+    await audit(
+        tenant, "credential.delete", resource_type="credential",
+        context={"connector_key": connector_key, "name": name},
+    )
     return Response(status_code=204)

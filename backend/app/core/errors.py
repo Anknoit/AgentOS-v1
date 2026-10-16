@@ -71,6 +71,27 @@ class PaymentError(AppError):
     code = "payment_error"
 
 
+class VelocityError(AppError):
+    """A tenant exceeded a fraud velocity limit (too many runs / top-ups in a window — Phase 6).
+
+    Maps to 429 Too Many Requests. Tripping a limit also places a hold, so the next billable
+    action is refused with ``TenantHeldError`` until an operator releases it.
+    """
+
+    status_code = 429
+    code = "velocity_exceeded"
+
+
+class TenantHeldError(ForbiddenError):
+    """Billable work is refused because the tenant is under a fraud/abuse hold (Phase 6).
+
+    Raised before a run is dispatched or a top-up is confirmed. An operator clears it via
+    ``POST /v1/admin/holds/{id}/release``; maps to 403.
+    """
+
+    code = "tenant_held"
+
+
 class NotFoundError(AppError):
     status_code = 404
     code = "not_found"
@@ -79,6 +100,13 @@ class NotFoundError(AppError):
 class ConflictError(AppError):
     status_code = 409
     code = "conflict"
+
+
+class ValidationError(AppError):
+    """A request was well-formed but semantically invalid (e.g. an unknown RBAC role)."""
+
+    status_code = 422
+    code = "validation_error"
 
 
 def _envelope(code: str, message: str, status_code: int) -> JSONResponse:

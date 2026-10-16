@@ -18,7 +18,7 @@ The profile is chosen by env (`AGENTOS_DATABASE_URL`, `AGENTOS_REDIS_URL`, `AGEN
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
-uv run pytest                      # 86 tests, all offline
+uv run pytest                      # 117 tests, all offline
 uv run agentos serve               # http://127.0.0.1:8787
 # Swagger UI:        http://127.0.0.1:8787/v1/docs
 # Prometheus:        http://127.0.0.1:8787/metrics
@@ -53,6 +53,11 @@ export AGENTOS_REDIS_URL=redis://localhost:6379/0
 uv run alembic upgrade head        # creates schema + switches on row-level security
 uv run agentos serve               # API
 uv run agentos worker              # Arq worker (separate process)
+uv run agentos replay <tenant>     # exactly-once replay / recovery (Phase 5)
+uv run agentos backup | restore    # tested DB snapshot + restore (Phase 5)
+uv run agentos rotate-keys         # re-encrypt the credential vault under a new master key (Phase 6)
+uv run agentos retention           # purge operational rows past the horizon; never the ledger (P6)
+uv run agentos posture             # security-posture report for a review (Phase 6)
 ```
 
 ## Layout
@@ -64,15 +69,20 @@ app/
   db/         engine, tenant-scoped sessions, base models, Alembic migrations (RLS), seed
   models/     tenant, user, api_key, usage_event, agent, agent_version, run, action_log, credential,
               rate_card, ledger_entry, wallet, budget, alert, payment, invoice, event_log,
-              consumer_offset
+              consumer_offset, audit_log, tenant_hold, marketplace_listing
   schemas/    Pydantic request/response DTOs
-  api/v1/     versioned routers: meta, agents, runs, usage, connectors,
-              spend/wallet/budgets/alerts, billing (topups/payments/reconciliation) + invoices, ops
+  api/v1/     versioned routers: meta, auth (SSO/roles), members + api-keys, agents, runs, usage,
+              connectors, spend/wallet/budgets/alerts, billing + invoices, ops, audit, compliance,
+              admin (fraud holds), marketplace
   runtime/    LangGraph kernel + checkpointer, built-in tools, templates, run manager, LLM providers
               + the model router (cost-aware failover), the fair scheduler, the Phase 0 agent-loop
               spike, the Arq queue seam (per-tenant partitions), usage store
   connectors/ MCP-first connector framework: capabilities, specs, MCP client + sessions,
               registry, broker (scope enforcement), built-in Slack/CRM/HTTP + generic MCP
+  identity/   (Phase 6) RBAC roles/permissions, SSO/OIDC token verification, member + API-key mgmt
+  compliance/ (Phase 6) control-plane audit log, data-retention purge, key rotation, posture report
+  fraud/      (Phase 6) velocity limits + tenant holds (anomaly-driven + manual)
+  marketplace/(Phase 6) publish/install agent templates + connectors across tenants
   services/   agent CRUD + versioning, run trigger/resume, connector discovery, credential vault,
               rate cards (+ TTL cache), spend aggregation, budgets, wallet enforcement
   metering/   money (nanodollars), rating engine, pipeline (capture→rate→ledger→wallet→anomaly),
@@ -201,11 +211,45 @@ agentos backup --dest /backups/agentos.sqlite
 agentos restore /backups/agentos.sqlite && agentos replay <tenant_id>
 ```
 
-## Invariants honored (Phases 0–5)
+## Enterprise & hardening (Phase 6)
+
+Clearing the trust-and-expansion bars for an enterprise tenant, without touching the accounting core
+(ADR-0012). Each capability is a swappable seam over a hermetic default; migration `0007` is additive.
+
+- **RBAC + SSO.** A principal (API key *or* SSO user) carries a `role`; write endpoints are gated by
+  `Scoped("<resource>:<action>")`, and `owner` grants everything (existing keys unaffected). A bearer
+  token that parses as a JWT is verified as SSO (`AGENTOS_SSO_MODE`: `none` / `mock` HS256 offline
+  IdP / `oidc` RS256+JWKS) and mapped to a tenant + role; API keys keep working alongside. Mint
+  scoped keys (`POST /v1/api-keys`) and manage members (`/v1/members`).
+- **Compliance.** Every control-plane mutation is appended to a tenant-scoped, append-only
+  `audit_log` (secrets never recorded), exportable at `GET /v1/audit`. `agentos rotate-keys`
+  re-encrypts the vault under a new master secret with zero downtime (`MultiFernet` + fallbacks).
+  `agentos retention` / `POST /v1/compliance/retention/purge` ages out operational rows — **never the
+  money ledger**. `GET /v1/compliance/report` (or `agentos posture`) is the security-review snapshot.
+- **Fraud & abuse.** Per-tenant velocity limits on runs and top-ups; a breach raises (429) **and**
+  places a hold. Runaway-loop anomalies promote to a hold via `POST /v1/admin/holds/scan`. A held
+  tenant's billable work is refused (403 `tenant_held`) until an operator releases it.
+- **Marketplace.** `POST /v1/marketplace/publish/{agent,connector}` shares config (never secrets) to
+  a cross-tenant public catalogue; `install` recreates it in the caller's own tenant.
+- **Self-hosted.** `AGENTOS_SINGLE_TENANT_ID` pins the instance to one tenant (any other principal is
+  refused); `deployment_mode` + `region` surface in `/health` and the posture report.
+
+```bash
+# role matrix, then a scoped key that can read but not write
+curl -s -H "Authorization: Bearer dev-local-key" http://127.0.0.1:8787/v1/auth/roles
+# the security-review snapshot (flags default secrets, SQLite-in-prod, open CORS, mock SSO)
+agentos posture
+# rotate the credential-vault master key, then enforce retention (never touches the ledger)
+agentos rotate-keys && agentos retention
+```
+
+## Invariants honored (Phases 0–6)
 
 - `tenant_id` on every tenant-scoped row; **Postgres RLS** enforces isolation at the data layer
-  (migrations `0001`–`0006` — now also `rate_card`, `ledger_entry`, `wallet`, `budget`, `alert`,
-  `payment`, `invoice`, `event_log`, `consumer_offset`), mirrored by app-layer scoping on SQLite.
+  (migrations `0001`–`0007` — now also `rate_card`, `ledger_entry`, `wallet`, `budget`, `alert`,
+  `payment`, `invoice`, `event_log`, `consumer_offset`, `audit_log`, `tenant_hold`), mirrored by
+  app-layer scoping on SQLite. `marketplace_listing` is the one deliberately cross-tenant table (a
+  public catalogue, system-session only, no secrets).
 - **Config is data, versioned.** `agent_version` is immutable; a run pins the exact version it
   executed, so behaviour is reproducible and a bad change rolls back.
 - **Agents run as managed jobs.** A run executes off the request path (in-process manager or Arq
@@ -232,4 +276,9 @@ agentos restore /backups/agentos.sqlite && agentos replay <tenant_id>
   replay re-derives the ledger with no double count and repairs any gap; per-tenant fair scheduling
   stops one tenant starving another; provider failover keeps the fleet serving and attributes usage
   correctly; backup/restore is tested and recovers committed spend (ADR-0011).
+- **Least privilege, auditable, and recoverable.** Every write is gated by the principal's RBAC role
+  (API key or SSO), every control-plane mutation is on an append-only, tenant-scoped audit trail
+  (secrets never recorded), the credential vault's master key rotates with zero downtime, retention
+  never deletes financial record, and a fraud hold halts a tenant's billable work — a self-hosted
+  instance can be pinned to a single tenant (ADR-0012).
 - Observability (structured logs, OTel traces, Prometheus metrics) wired before features.

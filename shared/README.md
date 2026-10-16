@@ -50,11 +50,11 @@ executes. The run is a managed job — disconnecting does not stop it.
 The Phase 0 spike socket `WS /v1/runs/stream` (anonymous, no agent) remains for the token-stream
 demo.
 
-## Current surface (Phases 0–5)
+## Current surface (Phases 0–6)
 
-- `GET  /health` — liveness + which DB/runtime profile is active (unauthenticated)
+- `GET  /health` — liveness + which DB/runtime profile is active, deployment mode + region (unauthenticated)
 - `GET  /metrics` — Prometheus metrics (unauthenticated)
-- `GET  /v1/whoami` — authenticated tenant context
+- `GET  /v1/whoami` — authenticated tenant context, including the principal's **role** and auth method
 - `POST /v1/agents` · `GET /v1/agents` · `GET|PATCH /v1/agents/{id}` — agent CRUD (immutable versions)
 - `GET  /v1/agents/{id}/versions` — an agent's config versions
 - `POST /v1/agents/{id}/runs` — trigger a run (returns the completed run in-process)
@@ -89,7 +89,22 @@ demo.
   the exactly-once result (new ledger entries, balance delta) and repairs any captured-but-unrated gap
 - `GET  /v1/ops/scheduler` — fair-scheduler capacity (global + per-tenant caps) and this tenant's share
 - `GET  /v1/ops/providers` — model-router provider health (candidates, which circuits are open)
+- `GET  /v1/auth/roles` — the RBAC role → permission matrix; `POST /v1/auth/sso/token` — mint a mock
+  SSO token (dev only; `AGENTOS_SSO_MODE=mock`). Any endpoint accepts an API key **or** an SSO JWT.
+- `GET|POST /v1/members` · `PATCH|DELETE /v1/members/{id}` — members + their RBAC roles
+- `GET|POST /v1/api-keys` · `DELETE /v1/api-keys/{id}` — scoped API keys (plaintext shown once)
+- `GET  /v1/audit` — the control-plane audit trail (who did what), exportable for a review
+- `GET  /v1/compliance/report` — security-posture snapshot; `POST /v1/compliance/retention/purge`;
+  `POST /v1/compliance/keys/rotate` — enforce retention / rotate the credential vault's master key
+- `GET|POST /v1/admin/holds` · `POST /v1/admin/holds/scan` · `POST /v1/admin/holds/{id}/release` —
+  fraud/abuse holds (a held tenant's billable work is refused with 403 `tenant_held`)
+- `GET  /v1/marketplace` · `POST /v1/marketplace/publish/{agent,connector}` ·
+  `POST /v1/marketplace/{id}/install` — share/install agent templates + connectors across tenants
 - Phase 0 spike: `POST /v1/runs`, `POST /v1/runs/sync`, `WS /v1/runs/stream`
+
+Write endpoints are gated by RBAC: the caller's role must grant the matching `<resource>:<action>`
+permission (the `owner` role grants all). A velocity breach returns 429 `velocity_exceeded`; a
+tenant on a fraud hold returns 403 `tenant_held`.
 
 A run halted by a hard budget **or a depleted prepaid balance** finalizes with status `stopped`
 (distinct from `completed`/`failed`). Money crosses the API as integer **nanodollars** (1 USD = 1e9)

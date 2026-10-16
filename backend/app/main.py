@@ -80,6 +80,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             env=settings.env,
             database="sqlite" if settings.is_sqlite else "postgres",
             runtime="inprocess" if settings.use_inprocess_runtime else "arq",
+            deployment_mode=settings.deployment_mode,
+            region=settings.data_region,
         )
 
     @app.get("/metrics", include_in_schema=False)

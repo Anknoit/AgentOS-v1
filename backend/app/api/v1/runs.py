@@ -16,7 +16,7 @@ from sqlalchemy import select
 from starlette.websockets import WebSocketDisconnect
 
 from app.config.settings import get_settings
-from app.core.auth import CurrentTenant, resolve_api_key
+from app.core.auth import CurrentTenant, resolve_bearer
 from app.core.context import set_tenant, set_trace_id
 from app.core.errors import AuthError, NotFoundError
 from app.core.logging import get_logger
@@ -105,7 +105,7 @@ async def stream_run(ws: WebSocket) -> None:
         await ws.close(code=4401)
         return
     try:
-        ctx = await resolve_api_key(token)
+        ctx = await resolve_bearer(token)
     except AuthError:
         await ws.close(code=4401)
         return
